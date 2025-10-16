@@ -1,0 +1,6 @@
+* 	-text
+*.txt 	text eol=crlf
+*.cpp	text eol=crlf
+*.h	text eol=crlf
+*.json  text eol=crlf
+*.rc    text eol=crlf
