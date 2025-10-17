@@ -10,6 +10,7 @@
 #include <math.h>
 #include <time.h>
 #include <sys/timeb.h> // semi-accurate timing
+#include <algorithm>
 
 #include "DEFG.h"
 #include "DEFGSpline.h"
@@ -46,14 +47,6 @@ static double BeginTime, StartTime, EndTime, FinalTime, ElapsedTime;	//lint -e55
 #ifdef DEFG_ENABLE_DIAG
 static char StatusOut[1204];
 #endif // DEFG_ENABLE_DIAG
-
-// starting at VNS3 we no longer watermark the gridder, since we don't offer a WCS that can read VNS3's DEMs
-// to prevent competition with
-#ifdef WCS_BUILD_DEMO_OLD
-// for Demo version watermarking
-RootTexture *TexRoot;
-float DEMRange;
-#endif //WCS_BUILD_DEMO_OLD
 
 
 // Stolen from WCS's MathSupport.cpp
@@ -1220,15 +1213,11 @@ int Abort = 0, Loop, GX, GY, XOff, YOff;
 unsigned long long GYm1Idx, GY0Idx, GYp1Idx, GYIdx, CenterCellID;
 int DisabledPoints = 0, UsablePoints = 0, Iterations, Counter;
 InputPoint *WorkPoint;
+int PointDisabled = 0; // false
 #ifdef DEFG_BUILD_WCSVNS
 BusyWin *BWRB = NULL;
-int PointDisabled;
 //int Boop;
 #endif // DEFG_BUILD_WCSVNS
-#ifdef WCS_BUILD_DEMO_OLD
-TextureData TexData;
-VertexDEM Vert;
-#endif // WCS_BUILD_DEMO_OLD
 
 
 //sprintf(StatusOut, "Beginning processing.\n"); PrintStatus(StatusOut);
@@ -1382,12 +1371,16 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 
 	if (Smoothing)
 		{
+#ifdef DEFG_BUILD_WCSVNS
 		PointDisabled = SmoothedInPoints[Loop].Disabled;
+#endif
 		} // if
 	else
 		{
+#ifdef DEFG_BUILD_WCSVNS
 		PointDisabled = InPoints[Loop].Disabled;
-		} // else
+#endif
+	} // else
 	if (!PointDisabled)
 		{
 		UsablePoints++;
@@ -2486,50 +2479,6 @@ if (Abort) return(0);
 BWRB = new BusyWin("Nulling", DefgGridHeight, 'BWSE', 0);
 #endif // DEFG_BUILD_WCSVNS
 
-#ifdef WCS_BUILD_DEMO_OLD
-if (!TexRoot)
-	{
-	return(0);
-	} // if
-else
-	{
-	float DEMMax = -FLT_MAX, DEMMin = FLT_MAX;
-	double MetersPerDegLat, MetersPerDegLon, PlanetRad;
-	// sample elevation range for watermarking
-	for (GY = 0; GY < DefgGridHeight; GY++)
-		{
-		GY0Idx  = (GY + 0) * DefgGridWidth;
-		for (GX = 0; GX < DefgGridWidth; GX++)
-			{
-			if (FinalOutput[GY0Idx + GX] != -FLT_MAX)
-				{
-				if (FinalOutput[GY0Idx + GX] > DEMMax)
-					{
-					DEMMax = FinalOutput[GY0Idx + GX];
-					} // if
-				if (FinalOutput[GY0Idx + GX] < DEMMin)
-					{
-					DEMMin = FinalOutput[GY0Idx + GX];
-					} // if
-				} // if
-			} // for
-		} // for
-	DEMRange = 100.0f;
-	if ((DEMMax != -FLT_MAX) && (DEMMin != FLT_MAX))
-		{
-		DEMRange = (DEMMax - DEMMin) * 0.2f;
-		} // if
-
-	TexData.VDEM[0] = &Vert;
-	TexData.TexRefLat = 0.0; // CenterLat
-	TexData.TexRefLon = 0.0; // CenterLon;
-	PlanetRad = GlobalApp->AppEffects->GetPlanetRadius();
-	MetersPerDegLat = LatScale(PlanetRad);
-	TexData.MetersPerDegLat = MetersPerDegLat;
-	MetersPerDegLon = LonScale(PlanetRad, TexData.TexRefLat);
-	TexData.MetersPerDegLon = MetersPerDegLon;
-	} // else
-#endif //WCS_BUILD_DEMO_OLD
 
 // convert -FLT_MAX values to Null value
 for (GY = 0; GY < DefgGridHeight; GY++)
@@ -2548,41 +2497,6 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 			{
 			FinalOutput[GY0Idx + GX] = NullVal;
 			} // if
-#ifdef WCS_BUILD_DEMO_OLD
-		// Do Demo version watermarking
-		else
-			{
-			if (!TexRoot)
-				{
-				Abort = 1;
-				} // if
-			else
-				{
-				double Displace = 0.0, Value[3], TexX, TexY;
-				// eval texture here
-				if ((GX + GY) & 8)
-					{
-					Displace = 1.0;
-
-					// fill in texture data
-					TexX = (double)GX / DefgGridWidth;
-					TexY = (double)GY / DefgGridHeight;
-					Vert.xyz[0] = Vert.XYZ[0] = TexX; // CalcX + SeedXOffset;
-					Vert.xyz[1] = Vert.XYZ[1] = TexX; // CalcY + SeedYOffset;
-					//TexData.LowX = TexData.HighX = CalcX + SeedXOffset;
-					//TexData.LowY = TexData.HighY = CalcY + SeedYOffset;
-					TexData.Latitude = Vert.Lat = TexX;
-					TexData.Longitude = Vert.Lon = TexY;
-					// evaluate texture
-					Value[0] = 0.0;
-					TexRoot->Eval(Value, &TexData);
-					Displace = Value[0];
-					} // if
-				//Displace = 0.0;
-				FinalOutput[GY0Idx + GX] += DEMRange * (float)Displace;
-				} // else
-			} // else
-#endif //WCS_BUILD_DEMO_OLD
 /*
 		if ((FinalOutput[GY0Idx + GX] != 0.0) && (fabs(FinalOutput[GY0Idx + GX]) < .0001)) // one-tenth of a mm is minimum epsilon value to appease OpenGL
 			{
@@ -2690,7 +2604,9 @@ int InitSmoothing = 0;
 
 if (NewMaxPoints == 0)
 	{
+#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
 	GlobalApp->StatusLog->PostError(WCS_LOG_SEVERITY_ERR, "No points selected.");
+#endif
 	return(0);
 	} // if
 
@@ -2932,7 +2848,9 @@ int DEFG::DoGrid(Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, T
 double minx, maxx, miny, maxy, LapX, LapY, VX, VY, VZ, Horilap = 0.0, Vertlap = 0.0;
 double add_x, add_y, cell_x, cell_y, delta_x, delta_y, last_x, last_y, last_z;
 VertexDEM CSConvert;
+#ifdef DEFG_BUILD_WCSVNS
 BusyWin *BWRB = NULL;
+#endif
 JoeCoordSys *MyAttr;
 CoordSys *MyCoords;
 VectorPoint *PLink;
@@ -2985,7 +2903,9 @@ if (TCCount > DEFG_LIMIT_INPOINTS)
 		} // if
 	} // if
 #endif // DEFG_LIMIT_INPOINTS
+#ifdef DEFG_BUILD_WCSVNS
 BWRB = new BusyWin("Counting Points in Tile", JoeCount, 'BWSE', 0);
+#endif
 for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
 	{
 	Joe *CurJoe;
@@ -3049,7 +2969,7 @@ for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
 						{
 						add_y = ceil(delta_y / cell_y) - 1.0;
 						} // if
-					adding += max((unsigned long)add_x, (unsigned long)add_y);
+					adding += std::max((unsigned long)add_x, (unsigned long)add_y);
 					} // if
 				else
 					{
@@ -3077,13 +2997,19 @@ for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
 			} // if
 		} // for
 
+#ifdef DEFG_BUILD_WCSVNS
 	if (BWRB && BWRB->Update(JoeLoop))
 		{
 		return(0);
 		} // if
-	} // for
+#endif // DEFG_BUILD_WCSVNS
+} // for
+
+#ifdef DEFG_BUILD_WCSVNS
+
 if (BWRB) delete BWRB;
 BWRB = NULL;
+#endif // DEFG_BUILD_WCSVNS
 
 // would default overscan values be ineffective here?
 if (SomeOverscan && InitMaxPoints == NOOSMaxPoints && Vertlap == 100.0 && Horilap == 100.0)
@@ -3105,7 +3031,9 @@ if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
 	{
 	SetBounds(minx, maxx, miny, maxy);
 	// transfer points to DEFG internal
+#ifdef DEFG_BUILD_WCSVNS
 	BWRB = new BusyWin("Clipping Points in Tile", JoeCount, 'BWSE', 0);
+#endif
 	for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
 		{
 		Joe *CurJoe;
@@ -3169,7 +3097,7 @@ if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
 							{
 							add_y = ceil(delta_y / cell_y) - 1.0;
 							} // if
-						adding += max((unsigned long)add_x, (unsigned long)add_y);
+						adding += std::max((unsigned long)add_x, (unsigned long)add_y);
 						} // if
 					else
 						{
@@ -3205,13 +3133,17 @@ if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
 					} // else
 				} // if
 			} // for
+#ifdef DEFG_BUILD_WCSVNS
 		if (BWRB && BWRB->Update(JoeLoop))
 			{
 			return(0);
 			} // if
+#endif
 		} // for
+#ifdef DEFG_BUILD_WCSVNS
 	if (BWRB) delete BWRB;
 	BWRB = NULL;
+#endif
 
 	// if we're not tiled, we could dump the initial points array here, as we've
 	// already made our own internal copy.
@@ -3220,35 +3152,8 @@ if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
 		TG->FreeControlPts();
 		} // if
 
-	// Prep for demo version texture burn-in
-	#ifdef WCS_BUILD_DEMO_OLD
-	TexRoot = new RootTexture(NULL, 0, 0, 0);
-	if (!TexRoot)
-		{
-		return(0);
-		} // if
-	else
-		{
-		Texture *Tex;
-		// set texture type to planar image
-		if (Tex = TexRoot->AddNewTexture(NULL, WCS_TEXTURE_TYPE_FRACTALNOISE))
-			{
-			// Don't set image yet
-			Tex->SetMiscDefaults();
-			//Tex->SetCoordSpace(WCS_TEXTURE_COORDSPACE_IMAGE_UNITYSCALE_NOZ, TRUE);
-			//Tex->SelfOpacity = 1; // to allow for Alpha-driven transparency
-			} // if
-		} // else
-
-	#endif //WCS_BUILD_DEMO_OLD
-
 	if (Grid())
 		{
-		// cleanup from demo version texture burn-in
-		#ifdef WCS_BUILD_DEMO_OLD
-		delete TexRoot;
-		TexRoot = NULL;
-		#endif //WCS_BUILD_DEMO_OLD
 		return(SaveDEM(MyCS, DBHost, ProjHost, EffectsHost, nng));
 		} // if
 	} // if
@@ -3261,6 +3166,7 @@ return(0);
 
 int DEFG::SaveDEM(CoordSys *MyCS, Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, NNGrid *nng)
 {
+	int Success = 0;
 
 #ifdef DEFG_BUILD_WCSVNS
 
@@ -3274,7 +3180,6 @@ Joe *Clip, *Added = NULL;
 //NotifyTag ChangeEvent[2];
 LayerEntry *LE = NULL;
 long x, y, SubsetIdx;
-int Success = 0;
 int Found = 0;
 char filename[256], ObjName[64], BaseName[64] /*, NameStr[64] */;
 

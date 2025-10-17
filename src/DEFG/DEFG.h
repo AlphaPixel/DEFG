@@ -3,9 +3,16 @@
 // Built from scratch and from parts of DEFG.cpp on
 // Fri Aug 24, 2001 by CXH
 
+#pragma once
+
 #if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
 #include "../Types.h"
-#endif // VNS or WCS6+
+#else
+  // Minimal stand-ins matching WCS Types.h layout
+typedef double Point3d[3];
+typedef float  Point3f[3];
+#endif
+
 
 #define DEFG_ENABLE_DIAG
 
