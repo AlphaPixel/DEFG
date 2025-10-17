@@ -1,0 +1,9 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# find_dependency(...)  # Add packages here when needed
+
+include("${CMAKE_CURRENT_LIST_DIR}/../../../include/DEFG") # header-only include hint (not required)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../lib")          # library hint (not required)
+
+set(DEFG_FOUND TRUE)

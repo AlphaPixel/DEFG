@@ -1,73 +1,68 @@
 {
-    "version": 3,
-    "cmakeMinimumRequired": {
-        "major": 3,
-        "minor": 21,
-        "patch": 0
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 21,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "default",
+      "displayName": "Default (no vcpkg)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/default",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
     },
-    "configurePresets": [
-        {
-            "name": "base",
-            "hidden": true,
-            "generator": "Visual Studio 17 2022",
-            "cmakeExecutable": "c:/program files/cmake/bin/cmake.exe",
-            "binaryDir": "${sourceDir}/out/build/${presetName}",
-            "installDir": "${sourceDir}/out/install/${presetName}",
-            "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
-            "environment": {
-                "VCPKG_FEATURE_FLAGS": "manifests,versions,binarycaching,registries"
-            },
-            "condition": {
-                "type": "equals",
-                "lhs": "${hostSystemName}",
-                "rhs": "Windows"
-            }
-        },
-        {
-            "name": "x64",
-            "hidden": true,
-            "inherits": "base",
-            "architecture": "x64",
-            "cacheVariables": {
-                "VCPKG_TARGET_TRIPLET": {
-                    "type": "STRING",
-                    "value": "x64-windows-static"
-                }
-            }
-        },
-        {
-            "name": "x64-debug",
-            "displayName": "DEFG x64 (Debug)",
-            "inherits": "x64",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": {
-                    "type": "STRING",
-                    "value": "Debug"
-                },
-            }
-        },
-        {
-            "name": "x64-release",
-            "displayName": "DEFG x64 (Release)",
-            "inherits": "x64",
-            "cacheVariables": {
-                "CMAKE_BUILD_TYPE": {
-                    "type": "STRING",
-                    "value": "Release"
-                }
-            }
-        }
-    ],
-    "buildPresets": [
-        {
-            "name": "x64-debug",
-            "configurePreset": "x64-debug",
-            "configuration": "Debug"
-        },
-        {
-            "name": "x64-release",
-            "configurePreset": "x64-release",
-            "configuration": "Release"
-        }
-    ]
+    {
+      "name": "vcpkg",
+      "displayName": "With vcpkg toolchain (requires VCPKG_ROOT)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/vcpkg",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    },
+    {
+      "name": "msvc-release",
+      "displayName": "MSVC 2022 Release (vcpkg if VCPKG_ROOT is set)",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build/msvc-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "vcpkg",
+      "configurePreset": "vcpkg"
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release",
+      "configuration": "Release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default"
+    },
+    {
+      "name": "vcpkg",
+      "configurePreset": "vcpkg"
+    },
+    {
+      "name": "msvc-release",
+      "configurePreset": "msvc-release"
+    }
+  ]
 }

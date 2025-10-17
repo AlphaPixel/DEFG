@@ -1,8 +1,5 @@
 {
-    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg/master/scripts/vcpkg.schema.json",
-    "name": "defg",
-    "version": "1.0.0",
-    "supports": "windows",
-    "dependencies": [
-    ]
-  }
+  "name": "defg",
+  "version-string": "0.1.0",
+  "dependencies": []
+}

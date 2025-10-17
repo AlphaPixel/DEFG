@@ -1,42 +1,81 @@
 cmake_minimum_required(VERSION 3.21)
-cmake_policy(SET CMP0091 NEW)   # Ensure MSVC_RUNTIME_LIBRARY is used below.
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/installer/nsis")
+# DEFG - Decent Extremely Fast Gridder
+project(DEFG
+  VERSION 0.1.0
+  DESCRIPTION "Decent Extremely Fast Gridder (legacy codebase)"
+  LANGUAGES CXX C)
 
-# Install targets for debugging
-# if(POLICY CMP0087)
-#     cmake_policy(SET CMP0087 NEW)   # Required for X_VCPKG_APPLOCAL_DEPS_INSTALL
-# endif()
+# Options
+option(DEFG_BUILD_TESTS "Build unit/regression test helpers" ON)
+option(DEFG_WARN_PEDANTIC "Enable extra warnings" ON)
 
-set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install/DEFG")
-set(X_VCPKG_APPLOCAL_DEPS_INSTALL ON)
-set(VCPKG_APPINSTALL_DEPS ON)
-
-project(DEFG)
-
-# Build settings
-#
-set(CMAKE_CXX_STANDARD 17)
+# Determine C++ standard (prefer 20 for toolchain compatibility)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-set(CMAKE_MFC_FLAG 1) # 1 = static linking, 2 = dynamic linking
 
-#
-# Write a file with the value of CMAKE_MSVC_RUNTIME_LIBRARY
-#
-file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/msvctype$<$<CONFIG:Debug>:Debug>.txt" CONTENT "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+# Honor warning flags
+if (MSVC)
+  add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/permissive->)
+  if (DEFG_WARN_PEDANTIC)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/W4>)
+  endif()
+else()
+  if (DEFG_WARN_PEDANTIC)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
+  endif()
+endif()
 
-#
-# Version information
-#
-set(APP_VERSION_MAJOR "1")
-set(APP_VERSION_MINOR "0")
-set(APP_VERSION_PATCH "0")
+# Library target
+add_library(defg STATIC
+  src/DEFG/DEFG.cpp
+  src/DEFG/DEFGDiag.cpp
+  src/DEFG/DEFGSpline.cpp
+  src/DEFG/DEFGSupport.cpp
+)
 
-set(APP_PACKAGE_DESCRIPTION "DEFG - Decent Extremely Fast Gridder")
-set(APP_PACKAGE_SUMMARY "DEFG - Decent Extremely Fast Gridder")
-set(APP_INSTALL_DIRECTORY "DEFG - Decent Extremely Fast Gridder")
+target_include_directories(defg
+  PUBLIC
+    ${PROJECT_SOURCE_DIR}/src/DEFG
+)
 
-add_subdirectory(src)
+# If you later adopt vcpkg packages, they'll link here.
+# target_link_libraries(defg PUBLIC ...)
+
+# Example/test harness (optional)
+if (DEFG_BUILD_TESTS)
+  enable_testing()
+  add_executable(defg-util tests/defg-util.cpp)
+  target_link_libraries(defg-util PRIVATE defg)
+  add_test(NAME defg-smoke COMMAND defg-util --help)
+endif()
+
+# Install rules
+include(GNUInstallDirs)
+install(TARGETS defg
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY src/DEFG/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/DEFG
+  FILES_MATCHING PATTERN "*.h" PATTERN "*.hpp"
+)
+
+# Package config (basic)
+include(CMakePackageConfigHelpers)
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/DEFGConfigVersion.cmake"
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMajorVersion
+)
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/DEFGConfig.cmake.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/DEFGConfig.cmake"
+  @ONLY
+)
+install(FILES
+  "${CMAKE_CURRENT_BINARY_DIR}/DEFGConfig.cmake"
+  "${CMAKE_CURRENT_BINARY_DIR}/DEFGConfigVersion.cmake"
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/DEFG
+)
