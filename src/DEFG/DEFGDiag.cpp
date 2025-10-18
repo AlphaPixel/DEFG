@@ -3,6 +3,11 @@
 // Built from DEFG.cpp on
 // Fri Aug 24, 2001 by CXH
 
+#include <cstddef> // for NULL et al
+#include <cstdio> // for FILE et al
+#include <cfloat> // for FLT_MAX et al
+
+
 #include "DEFG.h"
 #include "DEFGSpline.h"
 
