@@ -2,7 +2,7 @@
 // Made from modified parts of WCS GraphData.cpp
 // on July 26 2001 by CXH
 
-#include "../stdafx.h"
+#include <cstddef> // for NULL et al
 #include "DEFGSpline.h"
 
 double GetSplineValueGlobalT(double Dist, double OneMinusT, SimpleGraphNode *PrevPrevNode, SimpleGraphNode *PrevNode, SimpleGraphNode *NextNode, SimpleGraphNode *NextNextNode)

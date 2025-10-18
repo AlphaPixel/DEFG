@@ -3,8 +3,6 @@
 // Built from DEFG.cpp on
 // Fri Aug 24, 2001 by CXH
 
-#include "../stdafx.h"
-
 #include "DEFG.h"
 #include "DEFGSpline.h"
 
