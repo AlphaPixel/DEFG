@@ -20,10 +20,15 @@ class NNGrid;
 
 
 // are we built in VNS or stand-alone?
+<<<<<<< HEAD
 
 
 #if defined(DEFG_WITH_VNS)
 #if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6) 
+=======
+#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
+#if defined(DEFG_WITH_VNS)
+>>>>>>> c0ba03e (Added conditional compiles using DEFG_WITH_VNS; removed DEFG::SaveDEM (refs #20))
 #define DEFG_BUILD_WCSVNS
 #include "../Application.h"
 #include "../Useful.h"
@@ -36,12 +41,19 @@ class NNGrid;
 #include "../EffectsLib.h"
 #include "../Log.h"
 #include "../MathSupport.h"
+<<<<<<< HEAD
 #endif //  !DEFG_BUILD_WCSVNS
 #else 	
 #include "DEFGSupport.h"
 #endif // DEFG_WITH_VNS
  // WCS_BUILD_VNS
 
+=======
+#else //  !DEFG_WITH_VNS
+	#include "DEFGSupport.h"
+#endif // DEFG_WITH_VNS
+#endif // WCS_BUILD_VNS
+>>>>>>> c0ba03e (Added conditional compiles using DEFG_WITH_VNS; removed DEFG::SaveDEM (refs #20))
 
 #ifndef WCS_BUILD_VNS
 #define DEFG_LIMIT_INPOINTS				600000
