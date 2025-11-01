@@ -42,7 +42,6 @@
 
 /build/
 /out/
-/data/
 /.vscode/
 *.user
 /.vs/DEFG/CopilotIndices/
