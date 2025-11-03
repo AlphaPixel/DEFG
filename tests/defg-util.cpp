@@ -9,7 +9,7 @@
 
 //#define DEFG_INFILE				"RMNP42.xyz"
 //#define DEFG_INFILE				"Green.xyz"
-#define DEFG_INFILE				"etopo511B.xyz"
+//#define DEFG_INFILE				"etopo511B.xyz"
 #define DEFG_GRID_WIDTH			1000
 #define DEFG_GRID_HEIGHT		1000
 #define DEFG_MAX_INPOINTS		60000
@@ -19,6 +19,7 @@ int main(int Count, char *Vector[])
 DEFG Gridder;
 int NumPoints = 0;
 
+char InputFilePath[] = "";
 
 Gridder.InitSizes(DEFG_GRID_WIDTH, DEFG_GRID_HEIGHT, 1.0, 1.0, DEFG_MAX_INPOINTS);
 
@@ -29,7 +30,10 @@ if(Count > 1)
 	} // if
 else
 	{
-	NumPoints = LoadPoints(DEFG_INFILE, &Gridder);
+	if (InputFilePath[0] == '\0') {
+		printf("Error: Set the location for the InputFilePath.\n");
+	}
+	NumPoints = LoadPoints(InputFilePath, &Gridder);
 	} // else
 
 printf("Total Points loaded: %d.\n", NumPoints);
