@@ -9,6 +9,7 @@ project(DEFG
 # Options
 option(DEFG_BUILD_TESTS "Build unit/regression test helpers" ON)
 option(DEFG_WARN_PEDANTIC "Enable extra warnings" ON)
+option(DEFG_BUILD_WITH_VNS "Build DEFG with VNS Integration enabled" OFF)
 
 # Determine C++ standard (prefer 20 for toolchain compatibility)
 set(CMAKE_CXX_STANDARD 20)
@@ -25,6 +26,11 @@ else()
   if (DEFG_WARN_PEDANTIC)
     add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
   endif()
+endif()
+
+# Check whether DEFG is to be built with VNS, or as a standalone tool
+if (DEFG_BUILD_WITH_VNS)
+    add_compile_definitions(defg PUBLIC DEFG_WITH_VNS)
 endif()
 
 # Library target

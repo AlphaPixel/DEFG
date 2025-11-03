@@ -18,8 +18,12 @@
 // For API compatability
 class NNGrid;
 
+
 // are we built in VNS or stand-alone?
-#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
+
+
+#if defined(DEFG_WITH_VNS)
+#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6) 
 #define DEFG_BUILD_WCSVNS
 #include "../Application.h"
 #include "../Useful.h"
@@ -32,9 +36,12 @@ class NNGrid;
 #include "../EffectsLib.h"
 #include "../Log.h"
 #include "../MathSupport.h"
-#else //  !WCS_BUILD_VNS
+#endif //  !DEFG_BUILD_WCSVNS
+#else 	
 #include "DEFGSupport.h"
-#endif // !WCS_BUILD_VNS
+#endif // DEFG_WITH_VNS
+ // WCS_BUILD_VNS
+
 
 #ifndef WCS_BUILD_VNS
 #define DEFG_LIMIT_INPOINTS				6000
@@ -1214,7 +1221,7 @@ unsigned long long GYm1Idx, GY0Idx, GYp1Idx, GYIdx, CenterCellID;
 int DisabledPoints = 0, UsablePoints = 0, Iterations, Counter;
 InputPoint *WorkPoint;
 int PointDisabled = 0; // false
-#ifdef DEFG_BUILD_WCSVNS
+#if defined(DEFG_WITH_VNS)
 BusyWin *BWRB = NULL;
 //int Boop;
 #endif // DEFG_BUILD_WCSVNS
@@ -2841,7 +2848,10 @@ YRange = (BoundHighY - BoundLowY);
 
 /*===========================================================================*/
 
+#if defined(DEFG_WITH_VNS)
 // API used to be compatible with nngridr
+
+#if defined(DEFG_WITH_VNS)
 int DEFG::DoGrid(Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, TerraGridder *TG, Joe **TCJoeList, int JoeCount, int TCCount, NNGrid *nng,
 	double xstart, double xterm, double ystart, double yterm, CoordSys *MyCS)
 {
@@ -3161,13 +3171,14 @@ if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
 return(0);
 
 } // DEFG::DoGrid
-
+#endif // DEFG_WITH_VNS
 /*===========================================================================*/
+#endif
 
 int DEFG::SaveDEM(CoordSys *MyCS, Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, NNGrid *nng)
 {
 	int Success = 0;
-
+#if defined(DEFG_WITH_VNS)
 #ifdef DEFG_BUILD_WCSVNS
 
 // much code stolen from Gary's DEM saver in NNGrid.cpp -- NNGrid::MakeGrid()
@@ -3391,6 +3402,7 @@ if ((TempDEM.RawMap = (float *)malloc(SaveSize)) != NULL)
 	} // if memory OK
 
 #endif // DEFG_BUILD_WCSVNS
+#endif // DEFG_WITH_VNS
 return(Success);
 
 } // DEFG::SaveDEM
