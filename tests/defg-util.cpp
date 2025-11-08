@@ -12,7 +12,7 @@
 //#define DEFG_INFILE				"etopo511B.xyz"
 #define DEFG_GRID_WIDTH			1000
 #define DEFG_GRID_HEIGHT		1000
-#define DEFG_MAX_INPOINTS		60000
+#define DEFG_MAX_INPOINTS		600000
 
 int main(int Count, char *Vector[])
 {

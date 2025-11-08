@@ -15,7 +15,7 @@
 #include "DEFG.h"
 #include "DEFGSpline.h"
 
-// For API compatability
+// For API compatibility
 class NNGrid;
 
 
@@ -44,7 +44,7 @@ class NNGrid;
 
 
 #ifndef WCS_BUILD_VNS
-#define DEFG_LIMIT_INPOINTS				6000
+#define DEFG_LIMIT_INPOINTS				600000
 int InPointExcess;
 double ProcessAccum = 0;
 #endif // !WCS_BUILD_VNS
@@ -1238,7 +1238,7 @@ BeginTime = StartTime = GetSystemTimeFP();
 SetupGridCoordX(DefgGridWidth,  LowX, HighX);
 SetupGridCoordY(DefgGridHeight, LowY, HighY);
 
-memset(ID, 0, DefgGridCells * sizeof(unsigned long int));
+memset(ID, 0, DefgGridCells * sizeof(unsigned long long));
 ClearDist(0.0f);
 ClearEdgeBuf();
 ClearXBuffer();
@@ -1334,7 +1334,7 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 
 
 // re-rasterize with conflict-resolved pointset only
-memset(ID,  0, DefgGridCells * sizeof(unsigned long int));
+memset(ID,  0, DefgGridCells * sizeof(unsigned long long));
 memset(NonInfectious, 0, DefgGridCells);
 
 ClearDist(FLT_MAX);
@@ -1758,7 +1758,7 @@ if (Smoothing)
 			{
 			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
 			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long int)&SmoothedInPoints[Loop];
+			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
 			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
 			//EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
 			//XCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].X;
@@ -2113,7 +2113,7 @@ if (Smoothing)
 			{
 			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
 			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long int)&SmoothedInPoints[Loop];
+			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
 			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
 /*
 			if (GY == 37 && GX == 13)
@@ -2256,7 +2256,7 @@ SmoothPass = 2;
 			{
 			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
 			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long int)&SmoothedInPoints[Loop];
+			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
 			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
 			EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
 /*
@@ -2367,7 +2367,7 @@ else
 	InPoints = NULL;
 	} // else
 
-// for stingyness we can dump the edges list at this point
+// for stinginess we can dump the edges list at this point
 if (Edges && MaxSpans)			free(Edges);
 Edges = NULL;
 if (SmoothedEdges && MaxSpans)	free(SmoothedEdges);
@@ -2574,13 +2574,14 @@ BoundHighY =  DBL_MAX;
 
 int DEFG::AllocRasterBufs(int FullGridWidth, int FullGridHeight)
 {
+	size_t FinalOutItemSize = sizeof(unsigned long long); // because it doubles as the ID buffer, which is a 64-bit pointer
 
 // <<<>>> TempBuf only needs to be used when extrapolate is on
 if (!(TempBuf = (unsigned char *)calloc(1, FullGridWidth * FullGridHeight * sizeof(unsigned char))))
 	return(0);
 if (!(TempFloat = (float *)calloc(1, FullGridWidth * FullGridHeight * sizeof(float))))
 	return(0);
-if (!(FinalOutput = (float *)calloc(1, FullGridWidth * FullGridHeight * sizeof(float))))
+if (!(FinalOutput = (float *)calloc(1, FullGridWidth * FullGridHeight * FinalOutItemSize)))
 	return(0);
 if (!(EdgeBuf = (float *)calloc(1, FullGridWidth * FullGridHeight * sizeof(float))))
 	return(0);
