@@ -10,26 +10,6 @@
 #include "DEFGSupport.h"
 #include "DEFG.h"
 
-void *malloc(size_t AllocSize, unsigned long int Flags)
-{
-if(Flags & APPMEM_CLEAR)
-	{
-	return(calloc(1, AllocSize));
-	} // if
-else
-	{
-	return(malloc(AllocSize));
-	} // else
-
-}
-
-void free(void *Me)
-{
-free(Me);
-} // AppMem_Free
-
-
-
 int LoadPoints(char *InFile, DEFG *DG)
 {
 FILE *In;
