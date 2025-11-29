@@ -185,6 +185,7 @@ class DEFG
 		int GetFinalArrayWidth(void) {return(DefgGridWidth);};
 		int GetFinalArrayHeight(void) {return(DefgGridHeight);};
 		int SaveDEM(CoordSys *MyCS, Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, NNGrid *nng);
+		int SaveRawDEM(const std::string& loc);
 
 		// API used to be compatible with nngridr
 		int DoGrid(Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, TerraGridder *TG, Joe **TCJoeList, int JoeCount, int TCCount, NNGrid *nng, double xstart, double xterm, double ystart, double yterm, CoordSys *MyCS = NULL);

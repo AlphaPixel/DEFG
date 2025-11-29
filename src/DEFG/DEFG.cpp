@@ -11,6 +11,7 @@
 #include <time.h>
 #include <sys/timeb.h> // semi-accurate timing
 #include <algorithm>
+#include <fstream>
 
 #include "DEFG.h"
 #include "DEFGSpline.h"
@@ -3427,3 +3428,30 @@ SSmoothFrac = SmoothVal / 100.0;
 LSmoothFrac = 1.0 - SSmoothFrac;
 
 } // DEFG::SetSmoothVal
+
+/*===========================================================================*/
+
+int DEFG::SaveRawDEM(const std::string& loc)
+{
+	std::ofstream RawDEM;
+	RawDEM.open(loc, std::ios::binary);
+	if(!RawDEM.is_open())
+	{
+		printf("DEFG::SaveRawDEM : could not open file.");
+		return -1;
+	}
+	
+	for (int i = 0; i < LoadedPoints; ++i)
+	{
+		const auto& p = InPoints[i];
+		if (!p.Disabled)
+		{
+			RawDEM.write(reinterpret_cast<const char*>(FinalOutput), sizeof(float) * DefgGridHeight * DefgGridWidth);
+		}
+
+	}
+	if (!RawDEM.good())
+		return -1;
+	return 0;
+
+}
