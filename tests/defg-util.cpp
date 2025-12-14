@@ -44,6 +44,9 @@ if(NumPoints)
 
 	Gridder.AutoBoundPoints();
 	Gridder.Grid();
+	char file[] = "output.dem";
+	Gridder.SaveRawDEM(file);
+	printf("written to file");
 	} // if
 
 return(0);
