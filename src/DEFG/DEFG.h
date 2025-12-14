@@ -6,6 +6,7 @@
 #pragma once
 
 #include <cstddef> // for NULL et al
+#include <iostream>
 
 #if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
 #include "../Types.h"

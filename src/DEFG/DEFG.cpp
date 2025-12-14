@@ -2532,7 +2532,6 @@ if (Abort)
 #endif // DEFG_BUILD_WCSVNS
 
 //sprintf(StatusOut, "Total Elapsed Time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
-
 return(1);
 
 } // DEFG::Grid
