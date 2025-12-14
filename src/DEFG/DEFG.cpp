@@ -3440,17 +3440,10 @@ int DEFG::SaveRawDEM(const std::string& loc)
 		return -1;
 	}
 	
-	for (int i = 0; i < LoadedPoints; ++i)
-	{
-		const auto& p = InPoints[i];
-		if (!p.Disabled)
-		{
-			RawDEM.write(reinterpret_cast<const char*>(FinalOutput), sizeof(float) * DefgGridHeight * DefgGridWidth);
-		}
+	RawDEM.write(reinterpret_cast<const char*>(FinalOutput), sizeof(float) * DefgGridHeight * DefgGridWidth);
 
-	}
 	if (!RawDEM.good())
 		return -1;
-	return 0;
+	return DefgGridHeight * DefgGridWidth;
 
 }
