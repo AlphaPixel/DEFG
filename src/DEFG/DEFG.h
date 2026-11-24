@@ -1,20 +1,17 @@
+#pragma once
+#include <cstdint>
+#include <vector>
+
 // DEFG.h
 // Header for DEFG
 // Built from scratch and from parts of DEFG.cpp on
 // Fri Aug 24, 2001 by CXH
 
-#pragma once
+#include "DEFGHost.h"	// DEFG's only link to the program it runs in
 
-#include <cstddef> // for NULL et al
-
-#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
-#include "../Types.h"
-#else
-  // Minimal stand-ins matching WCS Types.h layout
+// The same types as in WCS's Types.h (repeating an identical typedef is legal), so DEFG needs no host header.
 typedef double Point3d[3];
-typedef float  Point3f[3];
-#endif
-
+typedef float Point3f[3];
 
 #define DEFG_ENABLE_DIAG
 
@@ -35,18 +32,27 @@ typedef float  Point3f[3];
 
 #define DEFG_SPANBLOCK_QUANTA	10
 
+#define DEFG_ON_GRID			1.0E-6	// cells: a point this close to a row, column or grid node counts as on it
+#define DEFG_OPEN_REACH			64		// cells: how far OpenGround looks for open ground...
+#define DEFG_OPEN_GROUND		4		// ...and how many free cells in a row count as open ground
+#define DEFG_SHORT_EDGE			0.5		// cells: nodes closer than this count as this far apart when the normals are solved
+#define DEFG_SLOPE_SWEEPS		400		// at most this many sweeps to settle the normals...
+#define DEFG_SLOPES_SETTLED		1.0E-12	// ...which have settled when none changes by more than this. Tight on purpose: at 1.0E-6
+										// (half the sweeps) the last digits of the grid depended on the order the points arrived in
+
 #define simplemin(a,b)            (((a) < (b)) ? (a) : (b))
 #define simplemax(a,b)            (((a) > (b)) ? (a) : (b))
 
 struct Span;
-class ControlPointDatum;
-class Database;
-class NNGrid;
-class CoordSys;
-class TerraGridder;
-class Joe;
-class Project;
-class EffectsLib;
+
+// a point of a row for the row fill that found its cell of the row buffers taken (DEFG::PutKnot)
+struct DEFGKnot
+	{
+	long Cell;
+	double GridX;
+	float Z, RowSlope;
+	bool operator<(const DEFGKnot &Other) const {return(Cell < Other.Cell);};
+	}; // DEFGKnot
 
 /*
 	double X, Y, Z;
@@ -65,11 +71,11 @@ struct InputPoint
 struct SmoothedInputPoint
 	{
 	DEFG_INPOINT_DEF
-	Point3f Normal;
+	double SlopeX, SlopeY;	// its normal, kept as the slopes of its tangent plane: dZ per grid cell along X and along Y
 	}; // InputPoint
 
 // crude non-C++ subclassing
-#define DEFG_SPAN_DEF unsigned long long PointA, PointB; char OrigConnect, TrisRef;
+#define DEFG_SPAN_DEF uintptr_t PointA, PointB; char OrigConnect, TrisRef;
 
 
 
@@ -99,7 +105,7 @@ class DEFG
 		float *TempFloat, *FinalOutput, *EdgeBuf;
 		float *SNX;
 		double *XCoordBuf;
-        unsigned long long *ID;
+		uintptr_t *ID;	// holds InputPoint pointers
 		unsigned char *NonInfectious;
 
 		long DefgGridWidth, DefgGridHeight;
@@ -118,10 +124,14 @@ class DEFG
 		double BoundLowX, BoundHighX, BoundLowY, BoundHighY;
 		double XStart, XTerm, YStart, YTerm;
 
+		DEFGHost *Host;	// never NULL: a default host stands in until SetHost is called
+
 		int LoadedPoints, TotalSpans;
+		std::vector<DEFGKnot> ExtraKnots;
 		float NullVal, SmoothVal;
 		double LSmoothFrac, SSmoothFrac;
-		char Smoothing, SmoothPass;
+		char Smoothing;
+		double PeakRoom, PitRoom;	// see SetLimits
 
 		double GridCoordRangeX, GridCoordLowX, GridCoordRangeY, GridCoordLowY, GridCoordSizeXmOneUnderRangeX, GridCoordSizeYmOneUnderRangeY;
 		int GridCoordSizeX, GridCoordSizeY;
@@ -143,7 +153,9 @@ class DEFG
 		void SetBounds(double NewMinX, double NewMaxX, double NewMinY, double NewMaxY);
 		void SetNullVal(float NewNullVal) {NullVal = NewNullVal;};
 		void SetSmoothVal(float NewSmoothVal);
+		void SetLimits(float PeakRise, float PitDepth);
 		void SetDensify(bool NewVal) {densify = NewVal;};
+		void SetHost(DEFGHost *NewHost);	// NULL for none. Set it before InitSizes or DoGrid and keep it alive until this object is gone: memory is released through it
 
 		void SetupUnifyInfo(float *SetupRowUnify, float *SetupColUnify, int SetupUnifyNSTileNum, int SetupUnifyEWTileNum, int SetupUnifyNSTiles, int SetupUnifyEWTiles)
 		 {RowUnify = SetupRowUnify; ColUnify = SetupColUnify; UnifyNSTileNum = SetupUnifyNSTileNum; UnifyEWTileNum = SetupUnifyEWTileNum; UnifyNSTiles = SetupUnifyNSTiles; UnifyEWTiles = SetupUnifyEWTiles;};
@@ -161,33 +173,38 @@ class DEFG
 		int GridFromCoordY(double Coord);
 		double fGridFromCoordX(double Coord);
 		double fGridFromCoordY(double Coord);
+		double GridPosX(double Coord);
+		double GridPosY(double Coord);
 		double CoordFromGrid(int GridSize, double LowCoord, double HighCoord, double Coord);
 		double CoordFromGridX(double Coord);
 		double CoordFromGridY(double Coord);
 		double EvalDistNoSq(double XA, double YA, double XB, double YB);
 		void FlagInterps(void);
-		int InfectCellVal(int GX, int GY, int XOff, unsigned long long Idx, float Weight);
+		int InfectCellVal(int GX, int GY, int XOff, unsigned long int Idx, float Weight);
 		void NormalizeExtrap(void);
-		int InfectCell(int GX, int GY, int XOff, unsigned long long Idx, unsigned long long CenterCellID, double CX, double CY, double RX, double RY);
+		int InfectCell(int GX, int GY, int XOff, unsigned long int Idx, uintptr_t CenterCellID, double CX, double CY, double RX, double RY);
 		int AddSpanToNode(InputPoint *AddNode, struct Span *AddSpan);
-		int SpanCell(int GX, int GY, int XOff, unsigned long long Idx, InputPoint *CenterCell);
+		int SpanCell(int GX, int GY, int XOff, unsigned long int Idx, InputPoint *CenterCell);
+		void PutKnot(long Cell, double GridX, double Z, double RowSlope);
+		int OpenGround(int GX, int GY, double &OpenX, double &OpenY);
+		void PlotNode(InputPoint *Node);
+		int CalcNodeSlopes(void);
+		double SmoothCurve(double T, double ZA, double ZB, double MA, double MB, double *Slope = NULL);
 		void RasterizeSpanElevPoints(InputPoint *PA, InputPoint *PB);
 		void SmoothRasterizeSpanElevPoints(InputPoint *IPA, InputPoint *IPB);
 		void RasterizeSpanElevGridHor(int XS, double DXS, int YS, double ZS, int XE, double DXE, float ZE, double SNXS, float SNXE);
 		void RasterizeSpanElev(struct Span *RasterSpan);
 		void SmoothRasterizeSpanElev(struct SmoothedSpan *RasterSpan);
-		void CalcSpanNormals(struct SmoothedSpan *RasterSpan);
-		void CalcSpanNormalsPoints(InputPoint *IPA, InputPoint *IPB);
 		bool AddPoint(double X, double Y, double Z);
 		bool AddPoints(Point3d &pt1, Point3d &pt2, unsigned long num2add);
 
 		float *GetFinalArray(void) {return(FinalOutput);};
 		int GetFinalArrayWidth(void) {return(DefgGridWidth);};
 		int GetFinalArrayHeight(void) {return(DefgGridHeight);};
-		int SaveDEM(CoordSys *MyCS, Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, NNGrid *nng);
+		int SaveDEM(void);	// trims and unifies the finished grid and gives it to the host
 
-		// API used to be compatible with nngridr
-		int DoGrid(Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, TerraGridder *TG, Joe **TCJoeList, int JoeCount, int TCCount, NNGrid *nng, double xstart, double xterm, double ystart, double yterm, CoordSys *MyCS = NULL);
+		// grids one tile with points from the host (DEFGHost::EnumeratePoints) and saves it (DEFGHost::SaveGrid)
+		int DoGrid(const DEFGGridSpec &Spec);
 
 
 #ifdef DEFG_ENABLE_DIAG

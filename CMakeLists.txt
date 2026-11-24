@@ -7,9 +7,8 @@ project(DEFG
   LANGUAGES CXX C)
 
 # Options
-option(DEFG_BUILD_TESTS "Build unit/regression test helpers" ON)
+option(DEFG_BUILD_TESTS "Build the test driver (defg-util) and the review tool (smoothvis)" ON)
 option(DEFG_WARN_PEDANTIC "Enable extra warnings" ON)
-option(DEFG_BUILD_WITH_VNS "Build DEFG with VNS Integration enabled" OFF)
 
 # Determine C++ standard (prefer 20 for toolchain compatibility)
 set(CMAKE_CXX_STANDARD 20)
@@ -24,21 +23,15 @@ if (MSVC)
   endif()
 else()
   if (DEFG_WARN_PEDANTIC)
-    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>)
+    add_compile_options("$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>")
   endif()
 endif()
 
-# Check whether DEFG is to be built with VNS, or as a standalone tool
-if (DEFG_BUILD_WITH_VNS)
-    add_compile_definitions(defg PUBLIC DEFG_WITH_VNS)
-endif()
-
-# Library target
+# Library target. DEFG reaches the program it runs in only through DEFGHost (src/DEFG/DEFGHost.h).
 add_library(defg STATIC
   src/DEFG/DEFG.cpp
   src/DEFG/DEFGDiag.cpp
   src/DEFG/DEFGSpline.cpp
-  src/DEFG/DEFGSupport.cpp
 )
 
 target_include_directories(defg
@@ -54,7 +47,10 @@ if (DEFG_BUILD_TESTS)
   enable_testing()
   add_executable(defg-util tests/defg-util.cpp)
   target_link_libraries(defg-util PRIVATE defg)
-  add_test(NAME defg-smoke COMMAND defg-util --help)
+  add_test(NAME defg-selftest COMMAND defg-util --selftest)
+  # grids a fixed set of cases for tests/vis/defgvis.py (numbers and pictures for judging a change)
+  add_executable(smoothvis tests/vis/smoothvis.cpp)
+  target_link_libraries(smoothvis PRIVATE defg)
 endif()
 
 # Install rules

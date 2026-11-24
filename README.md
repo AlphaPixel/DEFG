@@ -6,6 +6,30 @@ https://github.com/AlphaPixel/3DNature/tree/master/WCS-VNS/DEFG
 **DEFG** is a lightweight C++ library for converting irregularly spaced 3D point data — such as survey points or elevation samples — into a regular raster grid (Digital Elevation Model).  
 It supports optional *breaklines* (“spans”) for enforcing ridge and stream continuity, and can fill or extrapolate gaps in sparse datasets to produce a complete terrain surface.
 
+## State of this copy (November 2026)
+
+The sources in `src/DEFG` are VNS's Terrain Gridder as shipped in VNS 3.29 x64 (3.29.2026.1124), file for file. VNS still compiles its own copy (`WCS-VNS/DEFG`). Until the VNS build takes DEFG from this repository, change both together.
+
+- **No host code inside.** DEFG includes no VNS header and has no `#ifdef` for one. Everything it asks of the program it runs in goes through `DEFGHost` (`src/DEFG/DEFGHost.h`): memory, progress and cancel, messages, the control points, and storing the finished grid. Every call has a default, so DEFG also runs with no host at all. `DEFGSupport.*` and the `DEFG_WITH_VNS` switch are gone (issue #24).
+- **Smoothing reworked.** Node slopes come from minimum bending along the edges; a cubic curve runs along each edge and again along each row. Two limits, Peak Rise and Pit Depth (`SetLimits`, or `DEFGGridSpec`), say how far the surface may go above or below the points around a spot. With both at zero a lake and a mesa stay flat. The old code ignored the smoothing amount and lost the slope along one diagonal (issue #4).
+- **Points stay where they are.** A point is no longer moved to the corner of its cell, so grids differ from older versions with smoothing off as well.
+- **Two contour lines in one cell** are no longer averaged where open ground lies to one side: the cell keeps the line that faces the open ground (`DEFG::OpenGround`).
+- **64-bit.** Cell IDs are `uintptr_t` (issue #1).
+
+### Testing
+
+```
+cmake -S . -B build/test
+cmake --build build/test --config Release
+ctest --test-dir build/test -C Release
+```
+
+The test runs `defg-util --selftest`. It grids the control points of VNS's own Terrain Gridder test and compares the grid's hash with the one VNS gets, then checks the smoothing against surfaces of known shape: planes, hills, a lake, a mesa, and two contour lines sharing their cells. MSVC (x86 and x64) and GCC 15 on Linux give the same hashes.
+
+`defg-util <in.xyz> <out.raw>` grids a text file of points into 1000 x 1000 cells and writes the grid as raw floats.
+
+`tests/vis` holds the tools for judging a change by numbers and by eye. `smoothvis` grids a fixed set of cases (six synthetic, three from `data/`) into a folder. `defgvis.py` compares such folders: error against the true surface, overshoot, creases, and hill-shaded pictures side by side. `collide.py` and `densify.py` are the prototypes behind the shared-cell rule and behind a densification that is not in DEFG yet.
+
 ---
 
 ## Overview
@@ -27,8 +51,7 @@ Span rasterization and smoothing: spans between points are rasterized across the
 
 Spline evaluation for line sampling: DEFGSpline implements cubic Hermite interpolation (Catmull-Rom-style) over scalar samples with distances, with two modes: global-T (uniform tension factor via OneMinusT) and a no-TCB variant; optional per-node Tension/Continuity/Bias paths are compiled behind a macro. Tangents are distance-weighted combinations of neighbor differences; evaluation uses standard Hermite basis h1..h4 on the normalized segment parameter. These spline evaluators are intended for generating smooth values along polylines used as breaklines. 
 
-Standalone support and test harness: when not built inside the larger application, minimal wrappers provide zeroed/heap allocation, a portable millisecond timer, and an ASCII “XYZ” loader that negates X and Y to match the grid’s orientation before calling AddPoint. The sample main configures grid size and capacity, loads points (from argv or a default), autobounds, then calls Grid() to produce the DEM. 
-GitHub
+Host interface and test driver: DEFG calls its host through DEFGHost (memory, progress, messages, control points, saving the grid); with no host set, a default one allocates from the heap and does nothing else. The test driver (tests/defg-util.cpp) loads an ASCII “XYZ” file, negating X and Y to match the grid’s orientation before calling AddPoint, autobounds, then calls Grid() and dumps the grid; with --selftest it acts as a host and calls DoGrid() the way VNS does. 
 
 Key class API: InitSizes/InitSpans/AllocRasterBufs; SetExtrap/SetBounds/SetNullVal/SetSmoothVal/SetDensify/SetupUnifyInfo; Clear* buffers; AutoBoundPoints; SetupGridCoord*/GridFromCoord*/CoordFromGrid*; EvalDistNoSq; FlagInterps/InfectCell*/NormalizeExtrap; AddSpanToNode/SpanCell; RasterizeSpanElev* and SmoothRasterizeSpanElev*; CalcSpanNormals*; AddPoint/AddPoints; SaveDEM; DoGrid; plus optional diagnostic dump/print helpers and a spline test function.
 
@@ -55,7 +78,7 @@ Key class API: InitSizes/InitSpans/AllocRasterBufs; SetExtrap/SetBounds/SetNullV
   Includes cubic Hermite spline (Catmull–Rom–style) functions for smooth interpolation along lines or sampled paths.
 
 - **Standalone Test Harness**  
-  A minimal `main.cpp` demonstrates how to load an ASCII XYZ file, run the gridder, and produce a DEM output.
+  `tests/defg-util.cpp` loads an ASCII XYZ file, runs the gridder and writes the grid as raw floats; `--selftest` checks the gridder against VNS's results and against surfaces of known shape.
 
 ---
 
@@ -162,7 +185,8 @@ gridder.InitSpans(maxSpans);
 
 // 3. Configure parameters
 gridder.SetNullVal(-9999.0f);
-gridder.SetSmoothVal(0.25f);
+gridder.SetSmoothVal(100.0f);   // 0 = none, 100 = full
+gridder.SetLimits(0.0f, 0.0f);  // peak rise, pit depth
 gridder.SetExtrap(1);   // enable extrapolation
 
 // 4. Load input points
@@ -174,8 +198,8 @@ gridder.AutoBoundPoints();
 // 6. Execute gridding
 gridder.Grid();
 
-// 7. Retrieve or save DEM
-gridder.SaveDEM("output.dem");
+// 7. Retrieve the DEM
+float *dem = gridder.GetFinalArray();  // GetFinalArrayWidth() x GetFinalArrayHeight(), row by row
 ```
 
 ---
@@ -203,9 +227,11 @@ SetupGridCoordX/Y, GridFromCoordX/Y, fGridFromCoordX/Y, CoordFromGridX/Y.
 Call Grid() to rasterize point/spans, fill cells, mark gaps, extrapolate/normalize as configured. The test harness does: load → AutoBoundPoints() → Grid(). 
 
 7. Retrieve or persist results:
-Access the DEM via GetFinalArray(), GetFinalArrayWidth(), GetFinalArrayHeight(), or write using SaveDEM(...). 
+Access the DEM via GetFinalArray(), GetFinalArrayWidth(), GetFinalArrayHeight(), or let SaveDEM() hand it to the host's SaveGrid(). 
 
 8. Diagnostics (optional, if enabled):
 DumpPoints/ID/TempBuf/Dist/Elev/Edges, CreateDumpEdgeBuf/CreateDumpTempElev/CreateDumpTempDist/CreateDumpSNX, PrintStatus. 
 
-Typical minimal standalone flow (as in main.cpp): construct DEFG, call InitSizes(...), load points (e.g., via LoadPoints helper that calls AddPoint), AutoBoundPoints(), Grid().
+Typical minimal standalone flow (as in tests/defg-util.cpp): construct DEFG, call InitSizes(...), load points (e.g., via the LoadPoints helper there, which calls AddPoint), AutoBoundPoints(), Grid().
+
+A host program does less: it derives from DEFGHost, fills a DEFGGridSpec and calls SetHost() and DoGrid(). DEFG then asks the host for the points and gives it the finished grid.
