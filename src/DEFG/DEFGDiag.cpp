@@ -3,22 +3,16 @@
 // Built from DEFG.cpp on
 // Fri Aug 24, 2001 by CXH
 
-#include <cstddef> // for NULL et al
-#include <cstdio> // for FILE et al
-#include <cfloat> // for FLT_MAX et al
-
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <float.h>
 
 #include "DEFG.h"
 #include "DEFGSpline.h"
 
 #ifdef DEFG_ENABLE_DIAG
 
-#ifdef WCS_BUILD_VNS
-#include "../Application.h"
-#include "../Toolbar.h"
-extern WCSApp *GlobalApp;
-#else //  !WCS_BUILD_VNS
-#endif // !WCS_BUILD_VNS
 
 
 void DoSplineTest(double AX, double AY, double BX, double BY, double CX, double CY, double DX, double DY, char *FN, double Tension)
@@ -115,7 +109,7 @@ FILE *Dump;
 
 if(Dump = fopen(FileName, "wb"))
 	{
-	fwrite(ID, DefgGridWidth * DefgGridHeight * sizeof(unsigned long int), 1, Dump);
+	fwrite(ID, DefgGridWidth * DefgGridHeight * sizeof(uintptr_t), 1, Dump);
 	fclose(Dump);
 	Dump = NULL;
 	} // if
@@ -349,11 +343,7 @@ for(GY = 0; GY < DefgGridHeight; GY++)
 void DEFG::PrintStatus(char *Status)
 {
 
-#ifdef WCS_BUILD_VNS
-GlobalApp->MCP->SetCurrentStatusText(Status);
-#else //  !WCS_BUILD_VNS
-printf("%s\n", Status);
-#endif // !WCS_BUILD_VNS
+Host->StatusText(Status);
 
 } // DEFG::PrintStatus
 

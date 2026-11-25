@@ -6,7 +6,7 @@
       "project": "CMakeLists.txt",
       "name": "Universal (args)",
       "currentDir": "${workspaceRoot}",
-      "args": ["data/etopo511B.xyz"]
+      "args": ["data/etopo511B.xyz", "out/etopo511B.raw"]
     }
   ]
 }

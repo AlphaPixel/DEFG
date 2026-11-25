@@ -2,7 +2,7 @@
 // Made from modified parts of WCS GraphData.cpp
 // on July 26 2001 by CXH
 
-#include <cstddef> // for NULL et al
+#include <math.h>
 #include "DEFGSpline.h"
 
 double GetSplineValueGlobalT(double Dist, double OneMinusT, SimpleGraphNode *PrevPrevNode, SimpleGraphNode *PrevNode, SimpleGraphNode *NextNode, SimpleGraphNode *NextNextNode)
@@ -32,7 +32,7 @@ if (Space > 0.0)
 	h4 = S3 - S2;
 	return (P1 * h1 + P2 * h2 + D1 * h3 + D2 * h4);
 	} // if interesting point lies between prev and next
-return (PrevNode->Value);
+return (PrevNode->Value);		
 
 } // GetSplineValueGlobalT
 
@@ -64,7 +64,7 @@ if (Space > 0.0)
 	h4 = S3 - S2;
 	return (P1 * h1 + P2 * h2 + D1 * h3 + D2 * h4);
 	} // if interesting point lies between prev and next
-return (PrevNode->Value);
+return (PrevNode->Value);		
 
 } // GetSplineValueNoTCB
 
@@ -98,7 +98,7 @@ if (Space > 0.0)
 	h4 = S3 - S2;
 	return (P1 * h1 + P2 * h2 + D1 * h3 + D2 * h4);
 	} // if interesting point lies between prev and next
-return (PrevNode->Value);
+return (PrevNode->Value);		
 
 } // GetSplineValueTOnly
 
@@ -115,7 +115,7 @@ if (Space > 0.0)
 	{
 	P1 = PrevNode->Value;
 	P2 = NextNode->Value;
-	D1 =
+	D1 = 
 		((.5 * (P1 - PrevPrevNode->Value)
 		* (1.0 - PrevNode->TCB[0])
 		* (1.0 + PrevNode->TCB[1])
@@ -126,7 +126,7 @@ if (Space > 0.0)
 		* (1.0 - PrevNode->TCB[2])))
 		* (2.0 * Space / ((PrevNode->Distance - PrevPrevNode->Distance) + Space));
 
-	D2 =
+	D2 = 
 		((.5 * (P2 - P1)
 		* (1.0 - NextNode->TCB[0])
 		* (1.0 - NextNode->TCB[1])
@@ -148,7 +148,7 @@ if (Space > 0.0)
 	h4 = S3 - S2;
 	return (P1 * h1 + P2 * h2 + D1 * h3 + D2 * h4);
 	} // if interesting point lies between prev and next
-return (PrevNode->Value);
+return (PrevNode->Value);		
 
 } // GetSplineValue
 

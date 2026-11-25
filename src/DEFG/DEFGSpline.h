@@ -1,3 +1,5 @@
+#pragma once
+
 // DEFGSpline.h
 // Made from modified parts of WCS GraphData.h
 // on July 26 2001 by CXH
@@ -21,3 +23,4 @@ double GetSplineValueTOnly(double Dist, SimpleGraphNode *PrevPrevNode, SimpleGra
 double GetSplineValue(double Dist, SimpleGraphNode *PrevPrevNode, SimpleGraphNode *PrevNode, SimpleGraphNode *NextNode, SimpleGraphNode *NextNextNode);
 double GetSplineValueNoTCB(double Dist, SimpleGraphNode *PrevPrevNode, SimpleGraphNode *PrevNode, SimpleGraphNode *NextNode, SimpleGraphNode *NextNextNode);
 #endif // DEFG_SPLINE_LOCALTCB
+

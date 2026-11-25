@@ -10,44 +10,20 @@
 #include <math.h>
 #include <time.h>
 #include <sys/timeb.h> // semi-accurate timing
+
 #include <algorithm>
 
 #include "DEFG.h"
 #include "DEFGSpline.h"
 
-// For API compatibility
-class NNGrid;
+// DEFG reaches its host program only through DEFGHost (DEFGHost.h). This one serves when no host is set.
+static DEFGHost DefaultHost;
 
-
-// are we built in VNS or stand-alone?
-
-
-#if defined(DEFG_WITH_VNS)
-#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6) 
-#define DEFG_BUILD_WCSVNS
-#include "../Application.h"
-#include "../Useful.h"
-#include "../NNGrid.h"
-#include "../Database.h"
-#include "../Joe.h"
-#include "../DEM.h"
-#include "../Requester.h"
-#include "../Render.h"
-#include "../EffectsLib.h"
-#include "../Log.h"
-#include "../MathSupport.h"
-#endif //  !DEFG_BUILD_WCSVNS
-#else 	
-#include "DEFGSupport.h"
-#endif // DEFG_WITH_VNS
- // WCS_BUILD_VNS
-
-
-#ifndef WCS_BUILD_VNS
-#define DEFG_LIMIT_INPOINTS				600000
-int InPointExcess;
-double ProcessAccum = 0;
-#endif // !WCS_BUILD_VNS
+// Define DEFG_LIMIT_INPOINTS (a point count) to slow DoGrid down when it is given more points than that.
+#ifdef DEFG_LIMIT_INPOINTS
+static int InPointExcess;
+static double ProcessAccum = 0;
+#endif // DEFG_LIMIT_INPOINTS
 
 static double BeginTime, StartTime, EndTime, FinalTime, ElapsedTime;	//lint -e551
 
@@ -55,6 +31,74 @@ static double BeginTime, StartTime, EndTime, FinalTime, ElapsedTime;	//lint -e55
 static char StatusOut[1204];
 #endif // DEFG_ENABLE_DIAG
 
+// stage timing for the diagnostics
+static double DEFGTime(void)
+{
+return((double)clock() / CLOCKS_PER_SEC);
+} // DEFGTime
+
+// Copies of the vector helpers DEFG uses from WCS's MathSupport.cpp, so it needs nothing from there.
+static double VectorMagnitude(Point3d TP)
+{
+
+return (sqrt(TP[0] * TP[0] + TP[1] * TP[1] + TP[2] * TP[2]));
+
+} // VectorMagnitude
+
+static double PointDistance(Point3d EP, Point3d SP)
+{
+Point3d TempDist;
+
+TempDist[0] = EP[0] - SP[0];
+TempDist[1] = EP[1] - SP[1];
+TempDist[2] = EP[2] - SP[2];
+return(VectorMagnitude(TempDist));
+
+} // PointDistance
+
+static void UnitVector(Point3d UV)
+{
+double Len, Invert;
+
+Len = VectorMagnitude(UV);
+if (Len > 0.0)
+	{
+	Invert = 1.0 / Len;
+	UV[0] *= Invert;
+	UV[1] *= Invert;
+	UV[2] *= Invert;
+	} // if
+
+} // UnitVector
+
+static void SurfaceNormal(Point3d NP, Point3d FP, Point3d LP)
+{
+
+NP[0] = FP[1] * LP[2] - FP[2] * LP[1];
+NP[1] = FP[2] * LP[0] - FP[0] * LP[2];
+NP[2] = FP[0] * LP[1] - FP[1] * LP[0];
+
+UnitVector(NP);
+
+} // SurfaceNormal
+
+static void AddPoint3d(Point3d A, Point3d Add)
+{
+
+A[0] += Add[0];
+A[1] += Add[1];
+A[2] += Add[2];
+
+} // AddPoint3d
+
+static void NegateVector(Point3d A)
+{
+
+A[0] = -A[0];
+A[1] = -A[1];
+A[2] = -A[2];
+
+} // NegateVector
 
 // Stolen from WCS's MathSupport.cpp
 /*===========================================================================*/
@@ -185,9 +229,9 @@ for (BoundLoop = 0; BoundLoop < LoadedPoints; BoundLoop++)
 XRange = (HighX - LowX);
 YRange = (HighY - LowY);
 
-sprintf(StatusOut, "Lat:  %f to %f.\n", -HighY, -LowY); PrintStatus(StatusOut);
-sprintf(StatusOut, "Lon:  %f to %f.\n", -HighX, -LowX); PrintStatus(StatusOut);
-sprintf(StatusOut, "Elev: %f to %f.\n", HighZ, LowZ); PrintStatus(StatusOut);
+snprintf(StatusOut, sizeof(StatusOut), "Lat:  %f to %f.\n", -HighY, -LowY); PrintStatus(StatusOut);
+snprintf(StatusOut, sizeof(StatusOut), "Lon:  %f to %f.\n", -HighX, -LowX); PrintStatus(StatusOut);
+snprintf(StatusOut, sizeof(StatusOut), "Elev: %f to %f.\n", HighZ, LowZ); PrintStatus(StatusOut);
 
 return(BoundLoop);
 
@@ -407,11 +451,11 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 
 /*===========================================================================*/
 
-int DEFG::InfectCellVal(int GX, int GY, int XOff, unsigned long long Idx, float Weight)
+int DEFG::InfectCellVal(int GX, int GY, int XOff, unsigned long int Idx, float Weight)
 {
 //double DBoop;
 double NewVal;
-unsigned long long DestCellIdx, SrcCellIdx;
+unsigned long DestCellIdx, SrcCellIdx;
 //unsigned long boop = 0;
 
 DestCellIdx = Idx + (GX + XOff);
@@ -483,11 +527,11 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 
 /*===========================================================================*/
 
-int DEFG::InfectCell(int GX, int GY, int XOff, unsigned long long Idx, unsigned long long CenterCellID, double CX, double CY, double RX, double RY)
+int DEFG::InfectCell(int GX, int GY, int XOff, unsigned long int Idx, uintptr_t CenterCellID, double CX, double CY, double RX, double RY)
 {
 InputPoint *OldPoint = NULL;
 float Dist, OldDist;
-unsigned long long DestCellIdx;
+unsigned long int DestCellIdx;
 
 DestCellIdx = Idx + (GX + XOff);
 
@@ -552,11 +596,12 @@ return(0);
 
 /*===========================================================================*/
 
-int DEFG::SpanCell(int GX, int GY, int XOff, unsigned long long Idx, InputPoint *CenterCell)
+int DEFG::SpanCell(int GX, int GY, int XOff, unsigned long int Idx, InputPoint *CenterCell)
 {
 InputPoint *ANode, *BNode;
 struct Span *Moi;
-unsigned long long DestCellIdx, CenterCellID, OtherCellID;
+unsigned long DestCellIdx;
+uintptr_t CenterCellID, OtherCellID;
 signed long SearchSlot;
 char FoundA, FoundB;
 //Point3d FP /*, LP, NP */;
@@ -564,7 +609,7 @@ char FoundA, FoundB;
 
 DestCellIdx = Idx + (GX + XOff);
 
-CenterCellID = (unsigned long long)CenterCell;
+CenterCellID = (uintptr_t)CenterCell;
 if (ID[DestCellIdx] != CenterCellID)
 	{
 	OtherCellID  = ID[DestCellIdx];
@@ -669,7 +714,7 @@ if (ID[DestCellIdx] != CenterCellID)
 		} // if
 	if (FoundA ^ FoundB)
 		{
-		sprintf(StatusOut, "Strange Error: Span mismatch.\n"); PrintStatus(StatusOut);
+		snprintf(StatusOut, sizeof(StatusOut), "Strange Error: Span mismatch.\n"); PrintStatus(StatusOut);
 		} // if
 	return(1);
 	} // if
@@ -680,348 +725,142 @@ return(0);
 
 /*===========================================================================*/
 
+// The cubic of the smoothing: from ZA at T = 0 to ZB at T = 1 with slopes MA and MB (dZ/dT) at the ends.
+// Slope receives dZ/dT at T.
+// The end slopes are first held to limits. Without them the curve swings outside its two ends wherever a long edge
+// or row span meets a steep slope: pits and streaks across the level ground between two contour lines.
+// End slopes between 0 and 3 times the rise keep the curve between its ends. Outside that box each side has one
+// meaning: leaving the lower end downward, or reaching the upper end too steeply, dips below the lower end (a pit);
+// leaving the lower end too steeply, or reaching the upper end from above, rises over the upper end (a peak).
+// PitRoom and PeakRoom widen the box on those sides (SetLimits). With both at 0 a curve whose ends are level stays
+// level: a lake stays flat and so does a mesa. Pit room lets the banks' slopes carry on down under a lake, peak room
+// lets a hilltop round up over its highest contour, each without the other.
+double DEFG::SmoothCurve(double T, double ZA, double ZB, double MA, double MB, double *Slope)
+{
+double T2 = T * T, T3 = T2 * T, Rise = ZB - ZA;
+
+if (Rise >= 0.0)
+	{
+	MA = simplemax(-PitRoom, simplemin(MA, 3.0 * Rise + PeakRoom));
+	MB = simplemax(-PeakRoom, simplemin(MB, 3.0 * Rise + PitRoom));
+	} // if
+else
+	{
+	MA = simplemax(3.0 * Rise - PitRoom, simplemin(MA, PeakRoom));
+	MB = simplemax(3.0 * Rise - PeakRoom, simplemin(MB, PitRoom));
+	} // else
+if (Slope)
+	*Slope = (6.0 * T2 - 6.0 * T) * (ZA - ZB) + (3.0 * T2 - 4.0 * T + 1.0) * MA + (3.0 * T2 - 2.0 * T) * MB;
+
+return((2.0 * T3 - 3.0 * T2 + 1.0) * ZA + (3.0 * T2 - 2.0 * T3) * ZB + (T3 - 2.0 * T2 + T) * MA + (T3 - T2) * MB);
+
+} // DEFG::SmoothCurve
+
+/*===========================================================================*/
+
+// Smoothing, one edge of the triangulation:
+// - a cubic from A to B whose slope at each end is that of the end's tangent plane (its normal), sliced by the
+//   vertical plane of the edge;
+// - rasterized where it crosses each row: a point for the row fill (PutKnot) with its X position, its elevation
+//   and the surface slope along the row (dZ/dX per cell):
+//   along the edge the surface follows the cubic, across the edge its slope runs linearly from A's to B's.
+// Everything is in grid cells, with the ends where the points really are.
 void DEFG::SmoothRasterizeSpanElevPoints(InputPoint *IPA, InputPoint *IPB)
 {
-double LenFrac, DeltaX, DeltaY, DeltaZ, XPos, YPos, ZPos, dZA, dZB, dXA, dXB;
-double LineLen, DPos;
-double TdX, TSlope, HorizSlopeA, HorizSlopeB, HorizSlope, EdgeSlope, DeltaHS;
-Point3d PS, PE, PL, PN, PV, PJ;
+double AX, AY, BX, BY, LineLen, UX, UY, AlongA, AlongB, CrossA, CrossB, Cross, LenFrac, XPos, ZPos, DZ;
 SmoothedInputPoint *PA, *PB;
-SimpleGraphNode FourNode[4];
-int XS, XE, YS, YE, IDeltaX, IDeltaY, LoopStep, IX, IY;
-//int Boop;
+int IY, LastY, LoopStep;
 
 PA = (SmoothedInputPoint *)IPA;
 PB = (SmoothedInputPoint *)IPB;
-//RasterizeSpanElevPoints(IPA, IPB); return;
 
-DeltaX = PB->X - PA->X;
-DeltaY = PB->Y - PA->Y;
-DeltaZ = PB->Z - PA->Z;
+AX = GridPosX(PA->X);
+AY = GridPosY(PA->Y);
+BX = GridPosX(PB->X);
+BY = GridPosY(PB->Y);
+if (AY == BY)
+	return;	// it lies along the rows and crosses none: the row fill makes the same curve from its two ends
 
+LineLen = sqrt((BX - AX) * (BX - AX) + (BY - AY) * (BY - AY));
+// unit vector along the edge; (-UY, UX) is the unit vector across it
+UX = (BX - AX) / LineLen;
+UY = (BY - AY) / LineLen;
+AlongA = PA->SlopeX * UX + PA->SlopeY * UY;
+CrossA = PA->SlopeY * UX - PA->SlopeX * UY;
+AlongB = PB->SlopeX * UX + PB->SlopeY * UY;
+CrossB = PB->SlopeY * UX - PB->SlopeX * UY;
 
-XS = GridFromCoordX(PA->X);
-XE = GridFromCoordX(PB->X);
-YS = GridFromCoordY(PA->Y);
-YE = GridFromCoordY(PB->Y);
-
-PS[0] = fGridFromCoordX(PA->X);
-PS[1] = fGridFromCoordY(PA->Y);
-// set Z=0 to measure XY length of line only
-PS[2] = 0.0;
-
-PE[0] = fGridFromCoordX(PB->X);
-PE[1] = fGridFromCoordY(PB->Y);
-// set Z=0 to measure XY length of line only
-PE[2] = 0.0;
-
-// calculate length of line, which becomes length of control vectors
-LineLen = PointDistance(PE, PS);
-
-// fill in actual Z values now for normalling
-PS[2] = PA->Z;
-PE[2] = PB->Z;
-
-// Endpoint A
-// determine slope of tangents at Start/End nodes in plane of line
-// (reuse PS and PE entities)
-PL[0] = PE[0] - PS[0];
-PL[1] = PE[1] - PS[1];
-PL[2] = PE[2] - PS[2];
-UnitVector(PL);
-PV[0] = PA->Normal[0];
-PV[1] = PA->Normal[1];
-PV[2] = PA->Normal[2];
-// get sfc normal (PN) perpendicular to Node summed normal (PV) and vector of line (PL)
-SurfaceNormal(PN, PV, PL);
-// get sfc normal (PE) perpendicular to (PN ^that result^) and original Normal (PV)
-SurfaceNormal(PJ, PN, PV);
-// result in PJ should be normalized (length=1.0) so Z component can now be interpreted
-// as slope of line-wise component of node's summed surface normal.
-dZA = PJ[2]; // this is used as 'Y' in the 2D space of the spline, the vertical plane the original edge is contained in
-
-// need to calculate linewise 'run' component to go with 'rise' component (delta X, A or B)
-if (PJ[0] != 0.0 && PJ[1] != 0.0)
-	dXA = sqrt(PJ[0] * PJ[0] + PJ[1] * PJ[1]);  // SQRT=EVIL! I wish I could avoid this!
-else
-	dXA = fabs(PJ[0]) + fabs(PJ[1]);
-
-
-// Calculate the Y value at X=0 for the line passing through PB with slope dZA/dXA
-// This line is parallel to the tangent surface at PA, and thus should never be vertical,
-// therefore, dXA should never be 0.
-TSlope = dZA / dXA; // tangent slope
-TdX = -(LineLen + LineLen); // tangent delta x -- delta X between PB (X=2*LineLen) and first node at X=0
-
-// load coords into spline data structure, where PA is at X=LineLen
-// and Node 0 is always at 0
-FourNode[0].Distance = 0;
-FourNode[0].Value    = PE[2] + TdX * TSlope;
-//FourNode[0].Value    = PS[2] - (PE[2] - PS[2]);
-
-// calculate horizontal slope (rise/run of tangent surface where run never = 0)
-// at PA for linear interpolation during span rasterization
-// HorizSlope can = 0
-//HorizSlopeA = dXA / -dZA;
-HorizSlopeA = PA->Normal[0] / PA->Normal[2];
-
-
-// Endpoint B
-// determine slope of tangents at Start/End nodes in plane of line
-// (reuse PS and PE entities)
-// (PL is still valid from above)
-//PL[0] = PE[0] - PS[0];
-//PL[1] = PE[1] - PS[1];
-//PL[2] = PE[2] - PS[2];
-//UnitVector(PL);
-PV[0] = PB->Normal[0];
-PV[1] = PB->Normal[1];
-PV[2] = PB->Normal[2];
-// get sfc normal (PN) perpendicular to Node summed normal (PV) and vector of line (PL)
-SurfaceNormal(PN, PV, PL);
-// get sfc normal (PE) perpendicular to (PN ^that result^) and original Normal (PV)
-SurfaceNormal(PJ, PN, PV);
-// result in PJ should be normalized (length=1.0) so Z component can now be interpreted
-// as slope of line-wise component of node's summed surface normal.
-dZB = PJ[2]; // this is used as 'Y' in the 2D space of the spline, the vertical plane the original edge is contained in
-// need to calculate linewise 'run' component to go with 'rise' component (delta X, A or B)
-if (PJ[0] != 0.0 && PJ[1] != 0.0)
-	dXB = sqrt(PJ[0] * PJ[0] + PJ[1] * PJ[1]); // SQRT=EVIL! I wish I could avoid this!
-else
-	dXB = fabs(PJ[0]) + fabs(PJ[1]);
-
-// Calculate the Y value at X=0 for the line passing through PB with slope dZA/dXA
-// This line is parallel to the tangent surface at PA, and thus should never be vertical,
-// therefore, dXA should never be 0.
-TSlope = dZB / dXB; // tangent slope
-TdX = LineLen + LineLen; // tangent delta x -- delta X between PA (X=LineLen) and last node at X=3*LineLen
-
-// load coords into spline data structure, where PB is at X = 2 * LineLen
-// and Node 3 is always at 3*LineLen
-FourNode[3].Distance = LineLen + LineLen + LineLen;
-FourNode[3].Value    = PS[2] + TdX * TSlope;
-//FourNode[3].Value    = PE[2] + (PE[2] - PS[2]);
-
-// calculate horizontal slope (rise/run of tangent surface where run never = 0)
-// at PB for linear interpolation during span rasterization
-// HorizSlope can = 0
-//HorizSlopeB = dXB / -dZB;
-HorizSlopeB = PB->Normal[0] / PB->Normal[2];
-
-
-//HorizSlopeB = HorizSlopeA = 0.0;
-//FourNode[0].Distance = 0;
-//FourNode[0].Value    = PB->Z; // flat at nodes for testing
-FourNode[1].Distance = LineLen;
-FourNode[1].Value    = PA->Z;
-FourNode[2].Distance = LineLen + LineLen;
-FourNode[2].Value    = PB->Z;
-//FourNode[3].Distance = LineLen + LineLen + LineLen;
-//FourNode[3].Value    = PA->Z; // flat at nodes for testing
-#ifdef DEFG_SPLINE_LOCALTCB
-FourNode[0].TCB[0] = Tension;
-FourNode[1].TCB[0] = Tension;
-FourNode[2].TCB[0] = Tension;
-FourNode[3].TCB[0] = Tension;
-#endif // DEFG_SPLINE_LOCALTCB
-
-
-// number of loop steps
-IDeltaY = (YE - YS);
-IDeltaX = (XE - XS);
-
-if (IDeltaY != 0)
+// the rows it crosses, from A's end to B's
+if (AY < BY) {IY = (int)ceil(AY); LastY = (int)floor(BY); LoopStep = 1;}
+else {IY = (int)floor(AY); LastY = (int)ceil(BY); LoopStep = -1;}
+for (; (LastY - IY) * LoopStep >= 0; IY += LoopStep)
 	{
-	DeltaHS = HorizSlopeB - HorizSlopeA;
-	// scan more or less vertical
-	if (YS < YE) LoopStep = 1;
-	else LoopStep = -1;
-	IY = YS; // start at endpoint
-	while(1)	//lint !e716
+	LenFrac = (IY - AY) / (BY - AY);
+	XPos = AX + (LenFrac * (BX - AX));
+	if (fabs(XPos - floor(XPos + 0.5)) < DEFG_ON_GRID)
+		XPos = floor(XPos + 0.5);
+	ZPos = SmoothCurve(LenFrac, PA->Z, PB->Z, AlongA * LineLen, AlongB * LineLen, &DZ);
+	// the smoothing amount mixes the cubic with the straight edge
+	ZPos = SSmoothFrac * ZPos + LSmoothFrac * (PA->Z + (LenFrac * (PB->Z - PA->Z)));
+	Cross = CrossA + LenFrac * (CrossB - CrossA);
+
+	if (fabs(ZPos) < FLT_MIN)
 		{
-		// starting with known grid Y, solve for coord Y, coord X and Z
-		YPos = IY;
-		LenFrac = ((YS - YPos) / -IDeltaY);
-		if (LenFrac >= 0.0 && LenFrac <= 1.0)
-			{
-			XPos = XS + (LenFrac * IDeltaX);
-			//ZPos = PA->Z + (LenFrac * DeltaZ);
-			HorizSlope = HorizSlopeA + (LenFrac * DeltaHS);
-			// DPos is distance from Node 1 to Node 2, not total distance
-			DPos = LenFrac * LineLen;
-			ZPos = GetSplineValueNoTCB(DPos, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#ifdef DEFG_SPLINE_LOCALTCB
-			//ZPos = GetSplineValueTOnly(DPos, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#else // !DEFG_SPLINE_LOCALTCB
-			//ZPos = GetSplineValueGlobalT(DPos, 1.0, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#endif // !DEFG_SPLINE_LOCALTCB
-
-			// determine grid X from coord X
-			IX = (int)XPos;
-
-			// plot coord X value into X coord buf at grid X position
-			EdgeSlope = SNX[IY * DefgGridWidth + IX];
-
-			XCoordBuf[IY * DefgGridWidth + IX] = CoordFromGridX(XPos);
-
-			// plot horizontal slope value into Surface Normal X buffer for later use during H rasterization
-			SNX[IY * DefgGridWidth + IX] = (float)HorizSlope;
-			//SNX[IY * DefgGridWidth + IX] = 0.0f;
-			// plot Z elev into final output at grid X and Y pos
-			//FinalOutput[IY * DefgGridWidth + IX] = (float)ZPos;
-			if (fabs(ZPos) < FLT_MIN)
-				{
-				ZPos = 0.0;
-				} // if
-			EdgeBuf[IY * DefgGridWidth + IX] = (float)ZPos;
-			} // if
-
-		if (IY == YE) break; // after final pixel. Test before loop increment
-		IY += LoopStep;
-		} // while
-	} // if
+		ZPos = 0.0;
+		} // if
+	// the slope along the row: the X part of (slope along the edge) * (UX, UY) + (slope across it) * (-UY, UX)
+	PutKnot((long)IY * DefgGridWidth + (long)floor(XPos), XPos, ZPos, (DZ / LineLen) * UX - Cross * UY);
+	} // for
 
 } // SmoothRasterizeSpanElevPoints
 
 /*===========================================================================*/
 
+// One edge of the triangulation, rasterized where it crosses each row: a point for the row fill (PutKnot) with its
+// X position and elevation. The ends are where the points really are.
 void DEFG::RasterizeSpanElevPoints(InputPoint *PA, InputPoint *PB)
 {
-double LenFrac, DeltaX, DeltaY, DeltaZ, XPos, YPos, ZPos;
-int XS, XE, YS, YE, IDeltaX, IDeltaY, LoopStep, IX, IY;
-//int Boop;
+double AX, AY, BX, BY, LenFrac, XPos;
+int IY, LastY, LoopStep;
 
-DeltaX = PB->X - PA->X;
-DeltaY = PB->Y - PA->Y;
-DeltaZ = PB->Z - PA->Z;
+AX = GridPosX(PA->X);
+AY = GridPosY(PA->Y);
+BX = GridPosX(PB->X);
+BY = GridPosY(PB->Y);
+if (AY == BY)
+	return;	// it lies along the rows and crosses none
 
-
-XS = GridFromCoordX(PA->X);
-XE = GridFromCoordX(PB->X);
-YS = GridFromCoordY(PA->Y);
-YE = GridFromCoordY(PB->Y);
-
-// number of loop steps
-IDeltaY = (YE - YS);
-IDeltaX = (XE - XS);
-
-if (IDeltaY != 0)
+// the rows it crosses, from A's end to B's
+if (AY < BY) {IY = (int)ceil(AY); LastY = (int)floor(BY); LoopStep = 1;}
+else {IY = (int)floor(AY); LastY = (int)ceil(BY); LoopStep = -1;}
+for (; (LastY - IY) * LoopStep >= 0; IY += LoopStep)
 	{
-	// scan more or less vertical
-	if (YS < YE) LoopStep = 1;
-	else LoopStep = -1;
-	IY = YS; // start at endpoint
-	while(1)	//lint !e716
-		{
-		// starting with known grid Y, solve for coord Y, coord X and Z
-		YPos = IY;
-		LenFrac = ((YS - YPos) / (double)(-IDeltaY));
-		if (LenFrac >= 0.0 && LenFrac <= 1.0)
-			{
-			XPos = XS + (LenFrac * IDeltaX);
-			ZPos = PA->Z + (LenFrac * DeltaZ);
-
-			// determine grid X from coord X
-			IX = (int)XPos;
-
-			// plot coord X value into X coord buf at grid X position
-
-			XCoordBuf[IY * DefgGridWidth + IX] = CoordFromGridX(XPos);
-			// plot Z elev into final output at grid X and Y pos
-			//FinalOutput[IY * DefgGridWidth + IX] = (float)ZPos;
-			EdgeBuf[IY * DefgGridWidth + IX] = (float)ZPos;
-			} // if
-
-		if (IY == YE) break; // after final pixel. Test before loop increment
-		IY += LoopStep;
-		} // while
-	} // if
+	LenFrac = (IY - AY) / (BY - AY);
+	XPos = AX + (LenFrac * (BX - AX));
+	if (fabs(XPos - floor(XPos + 0.5)) < DEFG_ON_GRID)
+		XPos = floor(XPos + 0.5);
+	PutKnot((long)IY * DefgGridWidth + (long)floor(XPos), XPos, PA->Z + (LenFrac * (PB->Z - PA->Z)), 0.0);
+	} // for
 
 } // DEFG::RasterizeSpanElevPoints
 
 /*===========================================================================*/
 
-#define DEFG_TAN_MULT	100.0
-
 void DEFG::RasterizeSpanElevGridHor(int XS, double DXS, int YS, double ZS, int XE, double DXE, float ZE, double SNXS, float SNXE)
 {
-double DeltaX, DeltaZ, DeltaZStep, ZPos, LZPos, SZPos, LenFrac, XPos;
-double LineLen, DPos, TanLen;
-//double dZA, dZB, dXA, dXB;
-//double TdX, TSlope;
-//Point3d PS, PE, PL, PN;
-SimpleGraphNode FourNode[4];
+double DeltaX, DeltaZ, ZPos, LZPos, LenFrac, XPos, CellLen = 0.0;
 int LoopCoord, LoopStep;
 
-//SNXS = SNXE = 1.0;
-
-//int Boop = 0;
-/*
-if (YS == 37)
-	{
-	if (XS <= 14 && XE >= 14)
-		Boop = 1;
-	} // if
-*/
 DeltaX = DXS - DXE;
 DeltaZ = ZS - ZE;
 
-DeltaZStep = DeltaZ / DeltaX;
-
 if (XS < XE) LoopStep = 1;
 else LoopStep = -1;
-if (Smoothing && SmoothPass == 2)
+if (Smoothing)
 	{
-/*
-	if ((fabs(SNXE) > .1) || (fabs(SNXS) > .1))
-		{
-		Boop = 1;
-		} // if
-*/
-	// calculate length of line, which becomes length of control vectors
-	LineLen = fabs(DeltaX);
-	TanLen = LineLen * DEFG_TAN_MULT;
-
-	// remember SNXS and SNXE can = 0, because they are normalized rise component for run = 1.0
-	//dZA = SNXS; // this is used as 'Y' in the 2D space of the spline, the vertical plane the original edge is contained in
-	//dXA = 1.0;
-
-	// Calculate the Y value at X=0 for the line passing through PB with slope dZA/dXA
-	// This line is parallel to the tangent surface at PA, and thus should never be vertical,
-	// therefore, dXA should never be 0.
-	//TdX = (-(LineLen + LineLen)); // tangent delta x -- delta X between PB (X=2*LineLen) and first node at X=0
-
-	// load coords into spline data structure, where PA is at X=LineLen
-	FourNode[0].Distance = 0;
-	FourNode[0].Value    = ZE + (-(LineLen + TanLen)) * SNXS;
-
-	// remember SNXS and SNXE can = 0, because they are normalized rise component for run = 1.0
-	//dZB = SNXE; // this is used as 'Y' in the 2D space of the spline, the vertical plane the original edge is contained in
-	//dXB = 1.0;
-
-	// Calculate the Y value at X=0 for the line passing through PB with slope dZA/dXA
-	// This line is parallel to the tangent surface at PA, and thus should never be vertical,
-	// therefore, dXA should never be 0.
-	//TdX = LineLen + LineLen; // tangent delta x -- delta X between PA (X=LineLen) and last node at X=3*LineLen
-
-	// load coords into spline data structure, where PB is at X = 2 * LineLen
-	FourNode[3].Distance = TanLen + LineLen + TanLen;
-	FourNode[3].Value    = ZS + (TanLen + LineLen) * SNXE;
-
-	//FourNode[0].Distance = 0;
-	//FourNode[0].Value    = ZE; // flat at nodes for testing
-	FourNode[1].Distance = TanLen;
-	FourNode[1].Value    = ZS;
-	FourNode[2].Distance = TanLen + LineLen;
-	FourNode[2].Value    = ZE;
-	//FourNode[3].Distance = LineLen + LineLen + LineLen;
-	//FourNode[3].Value    = ZS; // flat at nodes for testing
-	#ifdef DEFG_SPLINE_LOCALTCB
-	FourNode[0].TCB[0] = Tension;
-	FourNode[1].TCB[0] = Tension;
-	FourNode[2].TCB[0] = Tension;
-	FourNode[3].TCB[0] = Tension;
-	#endif // DEFG_SPLINE_LOCALTCB
+	// Smoothing, the row fill: the cubic again, now along the row from one edge to the next, with the row
+	// slopes the edge pass left in SNX. Those are per cell, so the span is measured in cells (start to end).
+	CellLen = fGridFromCoordX(DXE) - fGridFromCoordX(DXS);
 	} // if smoothing
 
 LoopCoord = XS;
@@ -1033,33 +872,15 @@ while(1)	//lint !e716
 		{
 		// we need linear value either way
 		LZPos = ZS - (LenFrac * DeltaZ);
-		//if (Smoothing && SmoothPass == 2)
-		if (0)
+		if (Smoothing)
 			{
-			// DPos is distance from Node 1 to Node 2, not total distance
-			DPos = LenFrac * LineLen;
-			SZPos = GetSplineValueNoTCB(DPos, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#ifdef DEFG_SPLINE_LOCALTCB
-			//ZPos = GetSplineValueTOnly(DPos, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#else // !DEFG_SPLINE_LOCALTCB
-			//ZPos = GetSplineValueGlobalT(DPos, 1.0, &FourNode[0], &FourNode[1], &FourNode[2], &FourNode[3]);
-#endif // !DEFG_SPLINE_LOCALTCB
-			ZPos = SSmoothFrac * SZPos + LSmoothFrac * LZPos;
+			// the smoothing amount mixes the cubic with the straight line
+			ZPos = SSmoothFrac * SmoothCurve(LenFrac, ZS, ZE, SNXS * CellLen, SNXE * CellLen) + LSmoothFrac * LZPos;
 			} // if
 		else
 			{
 			ZPos = LZPos;
 			} // else
-		// debugging range checks
-		/*if (ZPos > simplemax(ZS, ZE) || ZPos < simplemin(ZS, ZE))
-			Boop = 1;
-		if (XPos > simplemax(DXS, DXE) || XPos < simplemin(DXS, DXE))
-			Boop = 1;
-		*/
-/*
-		if (ZPos < -9999)
-			Boop = 1;
-*/
 		if (fabs(ZPos) < FLT_MIN)
 			{
 			ZPos = 0.0;
@@ -1098,117 +919,179 @@ SmoothRasterizeSpanElevPoints(PA, PB);
 
 /*===========================================================================*/
 
-void DEFG::CalcSpanNormals(struct SmoothedSpan *RasterSpan)
+// Which way the open ground lies from a cell, judged from nothing but which cells hold points (TempFloat > 0 while
+// the points are being merged). Sixteen rays are walked from the cell until each meets a cell with a point or the
+// edge of the grid; each ray's free run times its direction adds to (OpenX, OpenY). Returns 0 if no ray runs
+// DEFG_OPEN_GROUND cells free or the runs cancel out: then there is no open ground to speak of on any side.
+int DEFG::OpenGround(int GX, int GY, double &OpenX, double &OpenY)
 {
-InputPoint *PA, *PB;
+static const double Ray[16][2] = {
+	{1.0, 0.0}, {0.9238795325, 0.3826834324}, {0.7071067812, 0.7071067812}, {0.3826834324, 0.9238795325},
+	{0.0, 1.0}, {-0.3826834324, 0.9238795325}, {-0.7071067812, 0.7071067812}, {-0.9238795325, 0.3826834324},
+	{-1.0, 0.0}, {-0.9238795325, -0.3826834324}, {-0.7071067812, -0.7071067812}, {-0.3826834324, -0.9238795325},
+	{0.0, -1.0}, {0.3826834324, -0.9238795325}, {0.7071067812, -0.7071067812}, {0.9238795325, -0.3826834324}};
+int Dir, Step, Run, Longest = 0, X, Y;
 
-PA = (InputPoint *)RasterSpan->PointA;
-PB = (InputPoint *)RasterSpan->PointB;
+OpenX = OpenY = 0.0;
+for (Dir = 0; Dir < 16; Dir++)
+	{
+	Run = 0;
+	for (Step = 1; Step <= DEFG_OPEN_REACH; Step++)
+		{
+		X = (int)floor(GX + Step * Ray[Dir][0] + 0.5);
+		Y = (int)floor(GY + Step * Ray[Dir][1] + 0.5);
+		if (X < 0 || Y < 0 || X >= DefgGridWidth || Y >= DefgGridHeight || TempFloat[Y * DefgGridWidth + X] > 0.0f)
+			break;
+		Run = Step;
+		} // for
+	OpenX += Run * Ray[Dir][0];
+	OpenY += Run * Ray[Dir][1];
+	if (Run > Longest)
+		Longest = Run;
+	} // for
 
-CalcSpanNormalsPoints(PA, PB);
-} // DEFG::CalcSpanNormals
+return(Longest >= DEFG_OPEN_GROUND && sqrt(OpenX * OpenX + OpenY * OpenY) >= DEFG_OPEN_GROUND);
+
+} // DEFG::OpenGround
 
 /*===========================================================================*/
 
-void DEFG::CalcSpanNormalsPoints(InputPoint *IPA, InputPoint *IPB)
+// Where a coordinate falls on the grid, in cells. Points are used where they are, not moved to a cell. One within a
+// millionth of a cell of a row, a column or a grid node is put exactly on it, so that points given on the grid stay there.
+double DEFG::GridPosX(double Coord)
 {
-double LenFrac, DeltaX, DeltaY, XPos, YPos;
-double LSlope, RSlope, EdgeSlope;
-double CenterZ, LeftZ, RightZ, SumCount;
-SmoothedInputPoint *PA, *PB;
-int XS, XE, YS, YE, IDeltaX, IDeltaY, LoopStep, IX, IY;
-//int Boop;
+double Pos = fGridFromCoordX(Coord), Near = floor(Pos + 0.5);
 
-PA = (SmoothedInputPoint *)IPA;
-PB = (SmoothedInputPoint *)IPB;
+return(fabs(Pos - Near) < DEFG_ON_GRID ? Near: Pos);
 
-DeltaX = PB->X - PA->X;
-DeltaY = PB->Y - PA->Y;
-//DeltaZ = PB->Z - PA->Z;
+} // DEFG::GridPosX
 
-XS = GridFromCoordX(PA->X);
-XE = GridFromCoordX(PB->X);
-YS = GridFromCoordY(PA->Y);
-YE = GridFromCoordY(PB->Y);
+/*===========================================================================*/
 
-// number of loop steps
-IDeltaY = (YE - YS);
-IDeltaX = (XE - XS);
+double DEFG::GridPosY(double Coord)
+{
+double Pos = fGridFromCoordY(Coord), Near = floor(Pos + 0.5);
 
-if (IDeltaY != 0)
+return(fabs(Pos - Near) < DEFG_ON_GRID ? Near: Pos);
+
+} // DEFG::GridPosY
+
+/*===========================================================================*/
+
+// One point of a row for the row fill: where an edge crosses the row or a node lies on it, with its elevation and,
+// when smoothing, the surface slope along the row. The row buffers hold one such point per cell; any others in the
+// same cell go to ExtraKnots, because the fill needs the leftmost to end the span that comes in and the rightmost to
+// start the next. Losing one of two used to run a span to the wrong point: a streak one row high.
+void DEFG::PutKnot(long Cell, double GridX, double Z, double RowSlope)
+{
+DEFGKnot Extra;
+
+if (EdgeBuf[Cell] != -FLT_MAX && XCoordBuf[Cell] != CoordFromGridX(GridX))
 	{
-	// scan more or less vertical
-	if (YS < YE) LoopStep = 1;
-	else LoopStep = -1;
-	IY = YS; // start at endpoint
-	while(1)	//lint !e716
-		{
-		EdgeSlope = SumCount = LSlope = RSlope = 0.0;
-		LeftZ = RightZ = -FLT_MAX;
-		// starting with known grid Y, solve for coord Y, coord X and Z
-		YPos = IY;
-		LenFrac = ((YS - YPos) / (double)(-IDeltaY));
-		if (LenFrac >= 0.0 && LenFrac <= 1.0)
-			{
-			XPos = XS + (LenFrac * (double)IDeltaX);
-			// determine grid X from coord X
-			IX = (int)(XPos);
-/*
-			if (IY == 5 && IX == 79)
-				{
-				Boop = 1;
-				} // if
-*/
-			CenterZ = FinalOutput[IY * DefgGridWidth + IX];
-			if (CenterZ != -FLT_MAX)
-				{
-				if (IX > 0)
-					{
-					LeftZ   = FinalOutput[IY * DefgGridWidth + (IX - 1)];
-					} // if
-				if (IX < DefgGridWidth - 1)
-					{
-					RightZ  = FinalOutput[IY * DefgGridWidth + (IX + 1)];
-					} // if
-				if (LeftZ != -FLT_MAX)
-					{
-					LSlope = CenterZ - LeftZ;
-					SumCount++;
-					} // if
-				if (RightZ != -FLT_MAX)
-					{
-					RSlope = RightZ - CenterZ;
-					SumCount++;
-					} // if
-				} // if center value valid
-
-			if (SumCount > 0)
-				{
-				EdgeSlope = (LSlope + RSlope) / SumCount;
-				} // if
-
-			// plot coord X value into X coord buf at grid X position
-			//XCoordBuf[IY * DefgGridWidth + IX] = XPos;
-
-			// plot horizontal slope value into Surface Normal X buffer for later use during H rasterization
-/*
-			if (EdgeSlope > 100000)
-				{
-				Boop = 1;
-				} // if
-*/
-			SNX[IY * DefgGridWidth + IX] = (float)EdgeSlope;
-			// plot Z elev into final output at grid X and Y pos
-			//FinalOutput[IY * DefgGridWidth + IX] = (float)ZPos;
-			//EdgeBuf[IY * DefgGridWidth + IX] = (float)ZPos;
-			} // if
-
-		if (IY == YE) break; // after final pixel. Test before loop increment
-		IY += LoopStep;
-		} // while
+	Extra.Cell = Cell;
+	Extra.GridX = GridX;
+	Extra.Z = (float)Z;
+	Extra.RowSlope = (float)RowSlope;
+	ExtraKnots.push_back(Extra);
+	return;
 	} // if
+EdgeBuf[Cell] = (float)Z;
+XCoordBuf[Cell] = CoordFromGridX(GridX);
+if (Smoothing)
+	SNX[Cell] = (float)RowSlope;
 
-} // CalcSpanNormalsPoints
+} // DEFG::PutKnot
+
+/*===========================================================================*/
+
+// A node that lies on a row is a point of that row for the row fill, and one on a grid node is that cell's elevation.
+// A node between rows reaches the grid only through its edges.
+void DEFG::PlotNode(InputPoint *Node)
+{
+double NX = GridPosX(Node->X), NY = GridPosY(Node->Y);
+long Cell;
+
+if (NY != floor(NY) || NX < 0.0 || NY < 0.0 || NX > DefgGridWidth - 1 || NY > DefgGridHeight - 1)
+	return;
+Cell = (long)NY * DefgGridWidth + (long)floor(NX);
+PutKnot(Cell, NX, Node->Z, Smoothing ? ((SmoothedInputPoint *)Node)->SlopeX: 0.0);
+if (NX == floor(NX))
+	FinalOutput[Cell] = (float)Node->Z;
+
+} // DEFG::PlotNode
+
+/*===========================================================================*/
+
+// Smoothing: gives every node its normal, kept as the slopes of its tangent plane.
+// They are the slopes that bend the curves along all the edges least (Nielson 1983, Renka 1984). Along one edge of
+// length L the bending of the cubic between two nodes is least when this node's slope along the edge is 1.5 times the
+// edge's own slope less half the neighbour's; each node gets the slopes that best meet that on all its edges at once,
+// weighted 1 / L^3, and the sweep over the nodes is repeated until the slopes settle. Returns 0 if cancelled.
+int DEFG::CalcNodeSlopes(void)
+{
+SmoothedInputPoint *Node, *Other;
+double NX, NY, EX, EY, L2, L3, Pull, AXX, AXY, AYY, BX, BY, Det, NewX, NewY, Change, Worst;
+int Sweep, Loop, Slot;
+
+for (Sweep = 0; Sweep < DEFG_SLOPE_SWEEPS; Sweep++)
+	{
+	if (Host->ProgressUpdate(Sweep))
+		return(0);
+	Worst = 0.0;
+	for (Loop = 0; Loop < LoadedPoints; Loop++)
+		{
+		Node = &SmoothedInPoints[Loop];
+		if (Node->Disabled)
+			continue;
+		NX = GridPosX(Node->X);
+		NY = GridPosY(Node->Y);
+		AXX = AXY = AYY = BX = BY = NewX = NewY = 0.0;
+		for (Slot = 0; Slot < Node->NumSpans; Slot++)
+			{
+			Other = (SmoothedInputPoint *)(Node->SpanBlock[Slot]->PointA == (uintptr_t)Node ? Node->SpanBlock[Slot]->PointB: Node->SpanBlock[Slot]->PointA);
+			EX = GridPosX(Other->X) - NX;
+			EY = GridPosY(Other->Y) - NY;
+			L2 = EX * EX + EY * EY;
+			if (L2 == 0.0)
+				continue;
+			if (L2 < DEFG_SHORT_EDGE * DEFG_SHORT_EDGE)
+				{ // the grid cannot resolve a slope between nodes this close: they count as DEFG_SHORT_EDGE apart
+				EX *= DEFG_SHORT_EDGE / sqrt(L2);
+				EY *= DEFG_SHORT_EDGE / sqrt(L2);
+				L2 = DEFG_SHORT_EDGE * DEFG_SHORT_EDGE;
+				} // if
+			L3 = L2 * sqrt(L2);
+			Pull = (3.0 * (Other->Z - Node->Z) - (Other->SlopeX * EX + Other->SlopeY * EY)) / (2.0 * L3);
+			AXX += EX * EX / L3;
+			AXY += EX * EY / L3;
+			AYY += EY * EY / L3;
+			BX += Pull * EX;
+			BY += Pull * EY;
+			} // for
+		Det = AXX * AYY - AXY * AXY;
+		if (Det > 1.0E-9 * (AXX + AYY) * (AXX + AYY))
+			{
+			NewX = (BX * AYY - BY * AXY) / Det;
+			NewY = (BY * AXX - BX * AXY) / Det;
+			} // if
+		else if ((Det = BX * (AXX * BX + AXY * BY) + BY * (AXY * BX + AYY * BY)) > 0.0)
+			{ // its neighbours all lie along one line: it gets the slope along that line and none across it
+			NewX = BX * (BX * BX + BY * BY) / Det;
+			NewY = BY * (BX * BX + BY * BY) / Det;
+			} // else if
+		Change = simplemax(fabs(NewX - Node->SlopeX), fabs(NewY - Node->SlopeY)) / simplemax(1.0, simplemax(fabs(NewX), fabs(NewY)));
+		if (Change > Worst)
+			Worst = Change;
+		Node->SlopeX = NewX;
+		Node->SlopeY = NewY;
+		} // for
+	if (Worst < DEFG_SLOPES_SETTLED)
+		break;
+	} // for
+
+return(1);
+
+} // DEFG::CalcNodeSlopes
 
 /*===========================================================================*/
 
@@ -1216,48 +1099,93 @@ int DEFG::Grid(void)
 {
 double CX, CY, RY, RX;
 int Abort = 0, Loop, GX, GY, XOff, YOff;
+size_t NextExtra;
 //int SpanSearchA, SpanSearchB;
-unsigned long long GYm1Idx, GY0Idx, GYp1Idx, GYIdx, CenterCellID;
-int DisabledPoints = 0, UsablePoints = 0, Iterations, Counter;
-InputPoint *WorkPoint;
-int PointDisabled = 0; // false
-#if defined(DEFG_WITH_VNS)
-BusyWin *BWRB = NULL;
+unsigned long int GYm1Idx, GY0Idx, GYp1Idx, GYIdx, Counter, Iterations, DisabledPoints = 0, UsablePoints = 0;
+uintptr_t CenterCellID;
+InputPoint *WorkPoint, *MergePoint;
+double OpenX, OpenY, Toward;
+long MergeCell;
+int PointDisabled;
 //int Boop;
-#endif // DEFG_BUILD_WCSVNS
 
 
-//sprintf(StatusOut, "Beginning processing.\n"); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Beginning processing.\n"); PrintStatus(StatusOut);
 
 if (!AllocRasterBufs(DefgGridWidth, DefgGridHeight))
 	return(0);
 
 
-BeginTime = StartTime = GetSystemTimeFP();
+BeginTime = StartTime = DEFGTime();
 
 SetupGridCoordX(DefgGridWidth,  LowX, HighX);
 SetupGridCoordY(DefgGridHeight, LowY, HighY);
 
-memset(ID, 0, DefgGridCells * sizeof(unsigned long long));
+memset(ID, 0, DefgGridCells * sizeof(uintptr_t));
 ClearDist(0.0f);
 ClearEdgeBuf();
 ClearXBuffer();
 // <<<>>> remove when done debugging
 memset(TempBuf, 0, DefgGridCells);
 
-//sprintf(StatusOut, "Merging points.\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-BWRB = new BusyWin("Merging Points", LoadedPoints, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+// Points that share a cell become one node. Where two contour lines pass through one cell, averaging their points
+// puts a node between the lines. On the shore of a lake that node stands above its neighbours, and long sloping
+// triangles run from it across the level water; the rim of a mesa has the same trouble upside down. So a cell
+// holding points of more than one elevation keeps the points of one elevation only: the one whose points lie
+// furthest toward the open ground, which is the line the open ground is bounded by. Nothing is known about the
+// lines themselves; the open ground is found from which cells hold points at all (OpenGround). Where there is no
+// open ground near, the cell's points are averaged as before: that is every cell of closely packed points.
+memset(NonInfectious, 0, DefgGridCells);
+for (Loop = 0; Loop < LoadedPoints; Loop++)
+	{ // which cells hold points (TempFloat counts them), and which hold more than one elevation (NonInfectious)
+	MergePoint = Smoothing ? (InputPoint *)&SmoothedInPoints[Loop]: &InPoints[Loop];
+	MergeCell = GridFromCoordY(MergePoint->Y) * DefgGridWidth + GridFromCoordX(MergePoint->X);
+	if (TempFloat[MergeCell] == 0.0f)
+		EdgeBuf[MergeCell] = (float)MergePoint->Z;
+	else if (EdgeBuf[MergeCell] != (float)MergePoint->Z && ! NonInfectious[MergeCell])
+		{
+		NonInfectious[MergeCell] = 1;
+		XCoordBuf[MergeCell] = -DBL_MAX;
+		} // else if
+	TempFloat[MergeCell] += 1.0f;
+	} // for
+for (Loop = 0; Loop < LoadedPoints; Loop++)
+	{ // in those cells: the elevation of the point furthest toward the open ground goes into EdgeBuf
+	MergePoint = Smoothing ? (InputPoint *)&SmoothedInPoints[Loop]: &InPoints[Loop];
+	MergeCell = GridFromCoordY(MergePoint->Y) * DefgGridWidth + GridFromCoordX(MergePoint->X);
+	if (NonInfectious[MergeCell] != 1)
+		continue;
+	if (! OpenGround(GridFromCoordX(MergePoint->X), GridFromCoordY(MergePoint->Y), OpenX, OpenY))
+		{
+		NonInfectious[MergeCell] = 2;	// no open ground: average
+		continue;
+		} // if
+	Toward = fGridFromCoordX(MergePoint->X) * OpenX + fGridFromCoordY(MergePoint->Y) * OpenY;
+	if (Toward > XCoordBuf[MergeCell])
+		{
+		XCoordBuf[MergeCell] = Toward;
+		EdgeBuf[MergeCell] = (float)MergePoint->Z;
+		} // if
+	} // for
+ClearDist(0.0f);
+
+//snprintf(StatusOut, sizeof(StatusOut), "Merging points.\n"); PrintStatus(StatusOut);
+Host->ProgressBegin("Merging Points", LoadedPoints);
 for (Loop = 0; Loop < LoadedPoints; Loop++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(Loop))
+	if (Host->ProgressUpdate(Loop))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
+	MergePoint = Smoothing ? (InputPoint *)&SmoothedInPoints[Loop]: &InPoints[Loop];
+	MergeCell = GridFromCoordY(MergePoint->Y) * DefgGridWidth + GridFromCoordX(MergePoint->X);
+	if (NonInfectious[MergeCell] == 1 && EdgeBuf[MergeCell] != (float)MergePoint->Z)
+		{ // another line's point in a cell that keeps the line facing the open ground
+		MergePoint->Disabled = 1;
+		DisabledPoints++;
+		continue;
+		} // if
 	if (Smoothing)
 		{
 		GX = GridFromCoordX(SmoothedInPoints[Loop].X);
@@ -1273,11 +1201,11 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 		{
 		if (Smoothing)
 			{
-			ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
+			ID[GY * DefgGridWidth + GX] = (uintptr_t)&SmoothedInPoints[Loop];
 			} // if
 		else
 			{
-			ID[GY * DefgGridWidth + GX] = (unsigned long long)&InPoints[Loop];
+			ID[GY * DefgGridWidth + GX] = (uintptr_t)&InPoints[Loop];
 			} // else
 		TempFloat[GY * DefgGridWidth + GX] = 1.0f;
 		} // if
@@ -1304,22 +1232,18 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 	} // for
 
 
-//sprintf(StatusOut, "Normalizing merged points.\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+//snprintf(StatusOut, sizeof(StatusOut), "Normalizing merged points.\n"); PrintStatus(StatusOut);
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Normalizing Merged Points", DefgGridHeight, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Normalizing Merged Points", DefgGridHeight);
 // normalize to complete averaging
 for (GY = 0; GY < DefgGridHeight; GY++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(GY))
+	if (Host->ProgressUpdate(GY))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 	for (GX = 0; GX < DefgGridWidth; GX++)
 		{
 		if (TempFloat[GY * DefgGridWidth + GX] > 1.0)
@@ -1333,8 +1257,10 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 	} // for
 
 
+ClearEdgeBuf();	// it held the kept elevations during the merge
+
 // re-rasterize with conflict-resolved pointset only
-memset(ID,  0, DefgGridCells * sizeof(unsigned long long));
+memset(ID,  0, DefgGridCells * sizeof(uintptr_t));
 memset(NonInfectious, 0, DefgGridCells);
 
 ClearDist(FLT_MAX);
@@ -1344,12 +1270,10 @@ ClearDist(FLT_MAX);
 
 //DumpPoints("c:\\tmp\\merged.xyz");
 
-//sprintf(StatusOut, "Processing merged points.\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+//snprintf(StatusOut, sizeof(StatusOut), "Processing merged points.\n"); PrintStatus(StatusOut);
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Processing Merged Points", LoadedPoints, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Processing Merged Points", LoadedPoints);
 for (Loop = 0; Loop < LoadedPoints; Loop++)
 	{
 /*
@@ -1358,13 +1282,11 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 		Boop = 1;
 		} // if
 */
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(Loop))
+	if (Host->ProgressUpdate(Loop))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 #ifdef DEFG_LIMIT_INPOINTS
 	if (InPointExcess > 0)
 		{
@@ -1378,16 +1300,12 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 
 	if (Smoothing)
 		{
-#ifdef DEFG_BUILD_WCSVNS
 		PointDisabled = SmoothedInPoints[Loop].Disabled;
-#endif
 		} // if
 	else
 		{
-#ifdef DEFG_BUILD_WCSVNS
 		PointDisabled = InPoints[Loop].Disabled;
-#endif
-	} // else
+		} // else
 	if (!PointDisabled)
 		{
 		UsablePoints++;
@@ -1395,29 +1313,13 @@ for (Loop = 0; Loop < LoadedPoints; Loop++)
 			{
 			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
 			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
-			//FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-			EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-/*
-			if (GY == 37 && GX == 13)
-				Boop = 1;
-*/
-			XCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].X;
-			//YCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].Y;
+			ID[GY * DefgGridWidth + GX] = (uintptr_t)&SmoothedInPoints[Loop];
 			} // if
 		else
 			{
 			GX = GridFromCoordX(InPoints[Loop].X);
 			GY = GridFromCoordY(InPoints[Loop].Y);
-			ID[GY * DefgGridWidth + GX] = (unsigned long long)&InPoints[Loop];
-			//FinalOutput[GY * DefgGridWidth + GX] = (float)InPoints[Loop].Z;
-			EdgeBuf[GY * DefgGridWidth + GX] = (float)InPoints[Loop].Z;
-/*
-			if (GY == 37 && GX == 13)
-				Boop = 1;
-*/
-			XCoordBuf[GY * DefgGridWidth + GX] = InPoints[Loop].X;
-			//YCoordBuf[GY * DefgGridWidth + GX] = InPoints[Loop].Y;
+			ID[GY * DefgGridWidth + GX] = (uintptr_t)&InPoints[Loop];
 			} // else
 		TempFloat[GY * DefgGridWidth + GX] = 0.0f;
 		} // if
@@ -1432,25 +1334,21 @@ if (!InitSpans(UsablePoints * DEFG_SPAN_MULT)) return(0);
 //DumpID("c:\\tmp\\startdump.raw");
 //CreateDumpEdgeBuf("c:\\tmp\\CardinalPoints.raw");
 
-//sprintf(StatusOut, "Processing network.\n"); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Processing network.\n"); PrintStatus(StatusOut);
 
 // iterate convolution-kernal trick
 
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Processing Network", 1 + (int)sqrt((double)(DefgGridWidth * DefgGridWidth + DefgGridHeight * DefgGridHeight)), 'BWSE', 0); //lint !e790
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Processing Network", 1 + (int)sqrt((double)(DefgGridWidth * DefgGridWidth + DefgGridHeight * DefgGridHeight))); //lint !e790
 Iterations = 0;
 do
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(Iterations))
+	if (Host->ProgressUpdate(Iterations))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 	Counter = 0;
 	for (GY = 0; GY < DefgGridHeight; GY++)
 		{
@@ -1560,12 +1458,12 @@ do
 	} while (Counter);
 
 
-EndTime = GetSystemTimeFP();
+EndTime = DEFGTime();
 ElapsedTime = (EndTime - StartTime);
 
-//sprintf(StatusOut, "Total Points processed: %d.\n", (LoadedPoints - DisabledPoints)); PrintStatus(StatusOut);
-//sprintf(StatusOut, "Total Iterations: %d.\n", Iterations); PrintStatus(StatusOut);
-//sprintf(StatusOut, "Elapsed NN computation time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Total Points processed: %d.\n", (LoadedPoints - DisabledPoints)); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Total Iterations: %d.\n", Iterations); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Elapsed NN computation time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
 
 //DumpID("c:\\tmp\\ID.raw");
 //CreateDumpTempDist("c:\\tmp\\dist.raw");
@@ -1573,24 +1471,20 @@ ElapsedTime = (EndTime - StartTime);
 
 // Create Span Lists
 
-//sprintf(StatusOut, "Spanning Cells...\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+//snprintf(StatusOut, sizeof(StatusOut), "Spanning Cells...\n"); PrintStatus(StatusOut);
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Spanning Cells", DefgGridHeight, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Spanning Cells", DefgGridHeight);
 
-StartTime = GetSystemTimeFP();
+StartTime = DEFGTime();
 
 for (GY = 0; GY < DefgGridHeight; GY++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(GY))
+	if (Host->ProgressUpdate(GY))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 
 #ifdef DEFG_LIMIT_INPOINTS
 	if (InPointExcess > 0)
@@ -1635,11 +1529,11 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 		} // for
 	} // for
 
-EndTime = GetSystemTimeFP();
+EndTime = DEFGTime();
 ElapsedTime = (EndTime - StartTime);
 
-//sprintf(StatusOut, "Total Spans created: %d.\n", TotalSpans); PrintStatus(StatusOut);
-//sprintf(StatusOut, "Elapsed Span computation time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Total Spans created: %d.\n", TotalSpans); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Elapsed Span computation time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
 
 //DumpEdges(DEFG_OUTFILE);
 
@@ -1647,34 +1541,47 @@ ElapsedTime = (EndTime - StartTime);
 //CreateDumpTempElev("c:\\tmp\\A.raw");
 
 
-//sprintf(StatusOut, "Computing Span and Node normals.\n"); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Computing Span and Node normals.\n"); PrintStatus(StatusOut);
 
 // ID buf now becomes FinalOutput from now on
 ClearFinalOutput();
 
+if (Smoothing)
+	{
+	Host->ProgressEnd();
+	if (Abort) return(0);
+	Host->ProgressBegin("Smoothing Nodes", DEFG_SLOPE_SWEEPS);
+	if (!CalcNodeSlopes())
+		Abort = 1;
+	} // if
 
-//sprintf(StatusOut, "Rasterizing Spans\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+// the nodes and the edges become points of the rows...
+ExtraKnots.clear();
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Rasterizing Spans", TotalSpans, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin(Smoothing ? "Rasterizing Smoothed Spans": "Rasterizing Spans", TotalSpans);
+for (Loop = 0; Loop < LoadedPoints; Loop++)
+	{
+	if (Smoothing)
+		{
+		if (!SmoothedInPoints[Loop].Disabled)
+			PlotNode((InputPoint *)&SmoothedInPoints[Loop]);
+		} // if
+	else if (!InPoints[Loop].Disabled)
+		{
+		PlotNode(&InPoints[Loop]);
+		} // else if
+	} // for
 for (Loop = 0; Loop < TotalSpans; Loop++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(Loop))
+	if (Host->ProgressUpdate(Loop))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 	if (Smoothing)
 		{
-/*
-		if (Loop == 15)
-			Boop = 1;
-*/
-		RasterizeSpanElev((struct Span *)&SmoothedEdges[Loop]);
+		SmoothRasterizeSpanElev(&SmoothedEdges[Loop]);
 		} // if
 	else
 		{
@@ -1685,23 +1592,21 @@ for (Loop = 0; Loop < TotalSpans; Loop++)
 //DumpElev("c:\\tmp\\LinearElevSpan.raw");
 //CreateDumpEdgeBuf("c:\\tmp\\LinearElevSpanChar.raw");
 
-
-//sprintf(StatusOut, "Horizontal Linear Polygon scan-filling..\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+// ...and each row is filled from one of those points to the next
+std::sort(ExtraKnots.begin(), ExtraKnots.end());
+NextExtra = 0;
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Polygon Filling", DefgGridHeight, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin(Smoothing ? "Smooth Polygon Filling": "Polygon Filling", DefgGridHeight);
 
 for (GY = 0; GY < DefgGridHeight; GY++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(GY))
+	double SNXS = 0.0, InX, OutX, InGridX, OutGridX, InZ, OutZ, InSlope, OutSlope;
+	if (Host->ProgressUpdate(GY))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 	int FoundPointA = 0, TPAX, TPAY;
 	double TPAZ, DTPAX;
 	GY0Idx  = GY * DefgGridWidth;
@@ -1709,693 +1614,88 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 		{
 		if (EdgeBuf[GY0Idx + GX] != -FLT_MAX)
 			{
-			if (FoundPointA)
-				{ // must be a point B
-				if (GX - TPAX) //lint !e530 // don't scanfill if there's no space between.
-					{
-					RasterizeSpanElevGridHor(TPAX, DTPAX, TPAY, TPAZ, GX, XCoordBuf[GY0Idx + GX], EdgeBuf[GY0Idx + GX], 0.0, 0.0f); //lint !e530
-					} // if
-				TPAX = GX;
-				DTPAX = XCoordBuf[GY0Idx + GX];
-				TPAY = GY;
-				TPAZ = EdgeBuf[GY0Idx + GX];
-				} // if
-			else
+			// the span coming in ends at this cell's leftmost point, the next one starts from its rightmost
+			InX = OutX = XCoordBuf[GY0Idx + GX];
+			InGridX = OutGridX = fGridFromCoordX(InX);
+			InZ = OutZ = EdgeBuf[GY0Idx + GX];
+			InSlope = OutSlope = Smoothing ? SNX[GY0Idx + GX]: 0.0;
+			for (; NextExtra < ExtraKnots.size() && ExtraKnots[NextExtra].Cell <= (long)(GY0Idx + GX); NextExtra++)
 				{
-				// transfer current location into TPA for next operation
-				TPAX = GX;
-				DTPAX = XCoordBuf[GY0Idx + GX];
-				TPAY = GY;
-				TPAZ = EdgeBuf[GY0Idx + GX];
-				} // else
+				if (ExtraKnots[NextExtra].Cell != (long)(GY0Idx + GX))
+					continue;
+				if (ExtraKnots[NextExtra].GridX < InGridX)
+					{
+					InGridX = ExtraKnots[NextExtra].GridX;
+					InX = CoordFromGridX(InGridX);
+					InZ = ExtraKnots[NextExtra].Z;
+					InSlope = ExtraKnots[NextExtra].RowSlope;
+					} // if
+				if (ExtraKnots[NextExtra].GridX > OutGridX)
+					{
+					OutGridX = ExtraKnots[NextExtra].GridX;
+					OutX = CoordFromGridX(OutGridX);
+					OutZ = ExtraKnots[NextExtra].Z;
+					OutSlope = ExtraKnots[NextExtra].RowSlope;
+					} // if
+				} // for
+			if (FoundPointA && GX - TPAX) //lint !e530 // don't scanfill if there's no space between.
+				{
+				RasterizeSpanElevGridHor(TPAX, DTPAX, TPAY, TPAZ, GX, InX, (float)InZ, SNXS, (float)InSlope); //lint !e530
+				} // if
+			if (fabs(InGridX - GX) < DEFG_ON_GRID)
+				FinalOutput[GY0Idx + GX] = (float)InZ;	// a point exactly on the cell is its elevation, span or no span
+			// transfer current location into TPA for next operation
+			TPAX = GX;
+			DTPAX = OutX;
+			TPAY = GY;
+			TPAZ = OutZ;
+			SNXS = OutSlope;
 			FoundPointA = 1;
 			} // if
 		} // for
 	} // for
+std::vector<DEFGKnot>().swap(ExtraKnots);
 
-
-// begin smoothing process
-if (Smoothing)
-	{
-	SmoothPass = 1;
-
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Processing Smoothed Points", LoadedPoints, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < LoadedPoints; Loop++)
-		{
-	#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-	#endif // DEFG_BUILD_WCSVNS
-		PointDisabled = SmoothedInPoints[Loop].Disabled;
-		if (!PointDisabled)
-			{
-			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
-			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
-			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-			//EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-			//XCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].X;
-			//YCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].Y;
-			//TempFloat[GY * DefgGridWidth + GX] = 0.0f;
-			} // if
-		} // for
-	} // if
-
-// examine each original point and assemble a new surface normal from
-// that point's relationship with the (up to) eight surrounding points.
-
-if (Smoothing)
-	{
-	Point3d CurNorm, NodeNorm, OffsetPoint, MiddlePoint;
-	int XOff, YOff, MXOff, MYOff;
-	double CenterZ, OffsetZ, MidZ, SumCount;
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Smoothing Nodes", LoadedPoints, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < LoadedPoints; Loop++)
-		{
-		NodeNorm[0] = NodeNorm[1] = NodeNorm[2] = 0.0;
-/*
-		if (Loop == 27108)
-			Boop = 1;
-*/
-	#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-	#endif // DEFG_BUILD_WCSVNS
-		PointDisabled = SmoothedInPoints[Loop].Disabled;
-		if (!PointDisabled)
-			{
-			SumCount = 0.0;
-			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
-			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			CenterZ = FinalOutput[GY * DefgGridWidth + GX];
-/*
-			if (CenterZ == -FLT_MAX)
-				{
-				Boop = 1;
-				} // if
-*/
-			// column to the left, 1 above, 2 below
-			if (GX > 0)
-				{
-				MXOff = XOff = -1;
-				MYOff = 0;
-				MidZ = FinalOutput[(GY + MYOff) * DefgGridWidth + (GX + MXOff)];
-				if (MidZ != -FLT_MAX)
-					{
-					MiddlePoint[0] = MXOff;
-					MiddlePoint[1] = MYOff;
-					MiddlePoint[2] = MidZ - CenterZ;
-					UnitVector(MiddlePoint);
-					// above row (1)
-					if (GY > 0)
-						{
-						YOff = -1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, MiddlePoint, OffsetPoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					// below row (2)
-					if (GY < DefgGridHeight - 1)
-						{
-						YOff = 1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, MiddlePoint, OffsetPoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					} // if
-				} // if
-
-			// column to the right, 3 above, 4 below
-			if (GX < DefgGridWidth - 1)
-				{
-				MXOff = XOff = 1;
-				MYOff = 0;
-				MidZ = FinalOutput[(GY + MYOff) * DefgGridWidth + (GX + MXOff)];
-				if (MidZ != -FLT_MAX)
-					{
-					MiddlePoint[0] = MXOff;
-					MiddlePoint[1] = MYOff;
-					MiddlePoint[2] = MidZ - CenterZ;
-					UnitVector(MiddlePoint);
-					// above row (3)
-					if (GY > 0)
-						{
-						YOff = -1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, MiddlePoint, OffsetPoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					// below row (4)
-					if (GY < DefgGridHeight - 1)
-						{
-						YOff = 1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, MiddlePoint, OffsetPoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					} // if
-				} // if
-
-
-			// row above, 5 left, 6 right
-			if (GY > 0)
-				{
-				MYOff = YOff = -1;
-				MXOff = 0;
-				MidZ = FinalOutput[(GY + MYOff) * DefgGridWidth + (GX + MXOff)];
-				if (MidZ != -FLT_MAX)
-					{
-					MiddlePoint[0] = MXOff;
-					MiddlePoint[1] = MYOff;
-					MiddlePoint[2] = MidZ - CenterZ;
-					UnitVector(MiddlePoint);
-					// left (5)
-					if (GX > 0)
-						{
-						XOff = -1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, OffsetPoint, MiddlePoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					// right (6)
-					if (GX < DefgGridWidth - 1)
-						{
-						XOff = 1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, OffsetPoint, MiddlePoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					} // if
-				} // if
-
-
-			// row below, 7 left, 8 right
-			if (GY < DefgGridHeight - 1)
-				{
-				MYOff = YOff = 1;
-				MXOff = 0;
-				MidZ = FinalOutput[(GY + MYOff) * DefgGridWidth + (GX + MXOff)];
-				if (MidZ != -FLT_MAX)
-					{
-					MiddlePoint[0] = MXOff;
-					MiddlePoint[1] = MYOff;
-					MiddlePoint[2] = MidZ - CenterZ;
-					// left (7)
-					if (GX > 0)
-						{
-						XOff = -1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, OffsetPoint, MiddlePoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					// right (8)
-					if (GX < DefgGridWidth - 1)
-						{
-						XOff = 1;
-						OffsetZ = FinalOutput[(GY + YOff) * DefgGridWidth + (GX + XOff)];
-						if (OffsetZ != -FLT_MAX)
-							{
-							OffsetPoint[0] = YOff;
-							OffsetPoint[1] = XOff;
-							OffsetPoint[2] = OffsetZ - CenterZ;
-							UnitVector(OffsetPoint);
-							SurfaceNormal(CurNorm, OffsetPoint, MiddlePoint);
-							if (CurNorm[2] < 0)
-								NegateVector(CurNorm);
-							AddPoint3d(NodeNorm, CurNorm);
-							SumCount++;
-							} // if
-						} // if
-					} // if
-				} // if
-
-			if (SumCount > 0 && (NodeNorm[0] != 0.0 || NodeNorm[1] != 0.0 || NodeNorm[2] != 0.0))
-			//if (0)
-				{
-				//double CheckLen;
-				Point3d Fixup;
-				Fixup[0] = (NodeNorm[0] / SumCount);
-				Fixup[1] = (NodeNorm[1] / SumCount);
-				Fixup[2] = (NodeNorm[2] / SumCount);
-
-				// deal with float underflow
-				if (fabs(Fixup[0]) < FLT_MIN)
-					{
-					if (Fixup[0] < 0)
-						{
-						Fixup[0] = -FLT_MIN;
-						} // if
-					else
-						{
-						Fixup[0] = FLT_MIN;
-						} // else
-					} // if
-				if (fabs(Fixup[1]) < FLT_MIN)
-					{
-					if (Fixup[1] < 0)
-						{
-						Fixup[1] = -FLT_MIN;
-						} // if
-					else
-						{
-						Fixup[1] = FLT_MIN;
-						} // else
-					} // if
-				if (fabs(Fixup[2]) < FLT_MIN)
-					{
-					if (Fixup[2] < 0)
-						{
-						Fixup[2] = -FLT_MIN;
-						} // if
-					else
-						{
-						Fixup[2] = FLT_MIN;
-						} // else
-					} // if
-				UnitVector(Fixup);
-
-				SmoothedInPoints[Loop].Normal[0] = (float)(Fixup[0]);
-				SmoothedInPoints[Loop].Normal[1] = (float)(Fixup[1]);
-				SmoothedInPoints[Loop].Normal[2] = (float)(Fixup[2]);
-
-				// <<<>>> Debug code
-				/*
-				CheckLen = sqrt((double)(SmoothedInPoints[Loop].Normal[0] * SmoothedInPoints[Loop].Normal[0] +
-				 SmoothedInPoints[Loop].Normal[1] * SmoothedInPoints[Loop].Normal[1] +
-				 SmoothedInPoints[Loop].Normal[2] * SmoothedInPoints[Loop].Normal[2]));
-				if (CheckLen > 1.001)
-					{
-					Boop = 1;
-					} // if
-				*/
-				} // if
-			else
-				{
-/*				CurNorm[0] = 0.0;
-				CurNorm[1] = 1.0;
-				CurNorm[2] = 1.0;
-				UnitVector(CurNorm);
-				SmoothedInPoints[Loop].Normal[0] = (float)CurNorm[0];
-				SmoothedInPoints[Loop].Normal[1] = (float)CurNorm[1];
-				SmoothedInPoints[Loop].Normal[2] = (float)CurNorm[2]; */
-				SmoothedInPoints[Loop].Normal[0] = 0.0f;
-				SmoothedInPoints[Loop].Normal[1] = 0.0f;
-				SmoothedInPoints[Loop].Normal[2] = 1.0f;
-				} // else
-			} // if
-		} // for
-
-
-	ClearFinalOutput();
-	ClearEdgeBuf();
-
-
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Processing Smoothed Points", LoadedPoints, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < LoadedPoints; Loop++)
-		{
-	#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-	#endif // DEFG_BUILD_WCSVNS
-		PointDisabled = SmoothedInPoints[Loop].Disabled;
-		if (!PointDisabled)
-			{
-			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
-			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
-			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-/*
-			if (GY == 37 && GX == 13)
-				Boop = 1;
-*/
-			EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-			XCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].X;
-			//YCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].Y;
-			//TempFloat[GY * DefgGridWidth + GX] = 0.0f;
-			} // if
-		} // for
-
-
-	//sprintf(StatusOut, "Rasterizing Spans\n"); PrintStatus(StatusOut);
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Rasterizing Smoothed Spans", TotalSpans, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < TotalSpans; Loop++)
-		{
-/*
-		if (Loop == 5)
-			Boop = 1;
-*/
-		#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-		#endif // DEFG_BUILD_WCSVNS
-		SmoothRasterizeSpanElev(&SmoothedEdges[Loop]);
-		} // for
-
-//DumpElev("c:\\tmp\\LinearElevSpan.raw");
-//CreateDumpEdgeBuf("c:\\tmp\\LinearElevSpanChar.raw");
-
-SmoothPass = 2;
-
-	//sprintf(StatusOut, "Horizontal Linear Polygon scan-filling..\n"); PrintStatus(StatusOut);
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Calculating Smoothed Polygon Edges", DefgGridHeight, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-
-	for (GY = 0; GY < DefgGridHeight; GY++)
-		{
-		double SNXS = 0.0, SNXE = 0.0;
-		#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(GY))
-			{
-			Abort = 1;
-			break;
-			} // if
-		#endif // DEFG_BUILD_WCSVNS
-		int FoundPointA = 0, TPAX, TPAY;
-		double TPAZ, DTPAX;
-		GY0Idx  = GY * DefgGridWidth;
-		for (GX = 0; GX < DefgGridWidth; GX++)
-			{
-			if (EdgeBuf[GY0Idx + GX] != -FLT_MAX)
-				{
-				if (FoundPointA)
-					{ // must be a point B
-					if (GX - TPAX) //lint !e530 // don't scanfill if there's no space between.
-						{
-						RasterizeSpanElevGridHor(TPAX, DTPAX, TPAY, TPAZ, GX, XCoordBuf[GY0Idx + GX], EdgeBuf[GY0Idx + GX], SNXS, SNX[GY0Idx + GX]); //lint !e530
-						} // if
-					TPAX = GX;
-					DTPAX = XCoordBuf[GY0Idx + GX];
-					TPAY = GY;
-					TPAZ = EdgeBuf[GY0Idx + GX];
-					SNXS = SNX[GY0Idx + GX];
-					} // if
-				else
-					{
-					// transfer current location into TPA for next operation
-					TPAX = GX;
-					DTPAX = XCoordBuf[GY0Idx + GX];
-					TPAY = GY;
-					TPAZ = EdgeBuf[GY0Idx + GX];
-					SNXS = SNX[GY0Idx + GX];
-/*
-					if (SNXS == FLT_MAX)
-						Boop = 1;
-*/
-					} // else
-				FoundPointA = 1;
-				} // if
-			} // for
-		} // for
-
-
-	// calculate new smoothed HSlopes and put into SNX buffer
-
-	//sprintf(StatusOut, "Rasterizing Spans\n"); PrintStatus(StatusOut);
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Calculating Smoothed Polygons", TotalSpans, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < TotalSpans; Loop++)
-		{
-/*
-		if (Loop == 5)
-			Boop = 1;
-*/
-		#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-		#endif // DEFG_BUILD_WCSVNS
-		CalcSpanNormals(&SmoothedEdges[Loop]);
-		} // for
-
-	ClearFinalOutput();
-
-	SmoothPass = 2;
-
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Processing Smoothed Points", LoadedPoints, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < LoadedPoints; Loop++)
-		{
-	#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-	#endif // DEFG_BUILD_WCSVNS
-		PointDisabled = SmoothedInPoints[Loop].Disabled;
-		if (!PointDisabled)
-			{
-			GX = GridFromCoordX(SmoothedInPoints[Loop].X);
-			GY = GridFromCoordY(SmoothedInPoints[Loop].Y);
-			//ID[GY * DefgGridWidth + GX] = (unsigned long long)&SmoothedInPoints[Loop];
-			FinalOutput[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-			EdgeBuf[GY * DefgGridWidth + GX] = (float)SmoothedInPoints[Loop].Z;
-/*
-			if (GY == 37 && GX == 13)
-				Boop = 1;
-*/
-			XCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].X;
-			//YCoordBuf[GY * DefgGridWidth + GX] = SmoothedInPoints[Loop].Y;
-			//TempFloat[GY * DefgGridWidth + GX] = 0.0f;
-			} // if
-		} // for
-
-
-	//sprintf(StatusOut, "Rasterizing Spans\n"); PrintStatus(StatusOut);
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Rasterizing Smoothed Spans", TotalSpans, 'BWSE', 0);
-	#endif // DEFG_BUILD_WCSVNS
-	for (Loop = 0; Loop < TotalSpans; Loop++)
-		{
-/*
-		if (Loop == 5)
-			Boop = 1;
-*/
-		#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Loop))
-			{
-			Abort = 1;
-			break;
-			} // if
-		#endif // DEFG_BUILD_WCSVNS
-		SmoothRasterizeSpanElev(&SmoothedEdges[Loop]);
-		} // for
-
-//DumpElev("c:\\tmp\\LinearElevSpan.raw");
-//CreateDumpEdgeBuf("c:\\tmp\\LinearElevSpanChar.raw");
-
-
-	//sprintf(StatusOut, "Horizontal Linear Polygon scan-filling..\n"); PrintStatus(StatusOut);
-	#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB; BWRB = NULL;
-	if (Abort) return(0);
-	BWRB = new BusyWin("Smooth Polygon Filling", DefgGridHeight, 'BWSE', 0); // "Calculating Smoothed Polygons"
-	#endif // DEFG_BUILD_WCSVNS
-
-	for (GY = 0; GY < DefgGridHeight; GY++)
-		{
-		double SNXS = 0.0, SNXE = 0.0;
-		#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(GY))
-			{
-			Abort = 1;
-			break;
-			} // if
-		#endif // DEFG_BUILD_WCSVNS
-		int FoundPointA = 0, TPAX, TPAY;
-		double TPAZ, DTPAX;
-		GY0Idx  = GY * DefgGridWidth;
-		for (GX = 0; GX < DefgGridWidth; GX++)
-			{
-			if (EdgeBuf[GY0Idx + GX] != -FLT_MAX)
-				{
-				if (FoundPointA)
-					{ // must be a point B
-					if (GX - TPAX) //lint !e530 // don't scanfill if there's no space between.
-						{
-						RasterizeSpanElevGridHor(TPAX, DTPAX, TPAY, TPAZ, GX, XCoordBuf[GY0Idx + GX], EdgeBuf[GY0Idx + GX], SNXS, SNX[GY0Idx + GX]); //lint !e530
-						} // if
-					TPAX = GX;
-					DTPAX = XCoordBuf[GY0Idx + GX];
-					TPAY = GY;
-					TPAZ = EdgeBuf[GY0Idx + GX];
-					SNXS = SNX[GY0Idx + GX];
-					} // if
-				else
-					{
-					// transfer current location into TPA for next operation
-					TPAX = GX;
-					DTPAX = XCoordBuf[GY0Idx + GX];
-					TPAY = GY;
-					TPAZ = EdgeBuf[GY0Idx + GX];
-					SNXS = SNX[GY0Idx + GX];
-/*
-					if (SNXS == FLT_MAX)
-						Boop = 1;
-*/
-					} // else
-				FoundPointA = 1;
-				} // if
-			} // for
-		} // for
-
-
-	} // if Smoothing
 //CreateDumpSNX("c:\\tmp\\SNX.raw");
 
 
 // for efficiency we can dump our set of points now
 if (Smoothing)
 	{
-	if (SmoothedInPoints)	free(SmoothedInPoints);
+	if (SmoothedInPoints)	Host->Free(SmoothedInPoints, MaxPoints * sizeof(struct SmoothedInputPoint));
 	SmoothedInPoints = NULL;
 	} // if
 else
 	{
-	if (InPoints)	free(InPoints);
+	if (InPoints)	Host->Free(InPoints, MaxPoints * sizeof(struct InputPoint));
 	InPoints = NULL;
 	} // else
 
-// for stinginess we can dump the edges list at this point
-if (Edges && MaxSpans)			free(Edges);
+// for stingyness we can dump the edges list at this point
+if (Edges && MaxSpans)			Host->Free(Edges, MaxSpans * sizeof(struct Span));
 Edges = NULL;
-if (SmoothedEdges && MaxSpans)	free(SmoothedEdges);
+if (SmoothedEdges && MaxSpans)	Host->Free(SmoothedEdges, MaxSpans * sizeof(struct SmoothedSpan));
 SmoothedEdges = NULL;
 
 
 
 if (Extrapolate)
 	{
-	//sprintf(StatusOut, "Post gap-filling and extrapolating.\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+	//snprintf(StatusOut, sizeof(StatusOut), "Post gap-filling and extrapolating.\n"); PrintStatus(StatusOut);
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Extrapolating", DefgGridHeight + DefgGridWidth, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Extrapolating", DefgGridHeight + DefgGridWidth);
 
 	FlagInterps();
 
 	Iterations = 0;
 	do
 		{
-#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(Iterations))
+		if (Host->ProgressUpdate(Iterations))
 			{
 			Abort = 1;
 			break;
 			} // if
-#endif // DEFG_BUILD_WCSVNS
 		Counter = 0;
 /*
 		if (Iterations == 52)
@@ -2476,27 +1776,23 @@ BWRB = new BusyWin("Extrapolating", DefgGridHeight + DefgGridWidth, 'BWSE', 0);
 		NormalizeExtrap();
 		Iterations++;
 		} while (Counter);
-	//sprintf(StatusOut, "Finished gap-filling, %d passes.\n", Iterations); PrintStatus(StatusOut);
+	//snprintf(StatusOut, sizeof(StatusOut), "Finished gap-filling, %d passes.\n", Iterations); PrintStatus(StatusOut);
 	} // if
 
-//sprintf(StatusOut, "Writing NullValue.\n"); PrintStatus(StatusOut);
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB) delete BWRB; BWRB = NULL;
+//snprintf(StatusOut, sizeof(StatusOut), "Writing NullValue.\n"); PrintStatus(StatusOut);
+Host->ProgressEnd();
 if (Abort) return(0);
-BWRB = new BusyWin("Nulling", DefgGridHeight, 'BWSE', 0);
-#endif // DEFG_BUILD_WCSVNS
+Host->ProgressBegin("Nulling", DefgGridHeight);
 
 
 // convert -FLT_MAX values to Null value
 for (GY = 0; GY < DefgGridHeight; GY++)
 	{
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(GY))
+	if (Host->ProgressUpdate(GY))
 		{
 		Abort = 1;
 		break;
 		} // if
-#endif // DEFG_BUILD_WCSVNS
 	GY0Idx  = (GY + 0) * DefgGridWidth;
 	for (GX = 0; GX < DefgGridWidth; GX++)
 		{
@@ -2513,24 +1809,18 @@ for (GY = 0; GY < DefgGridHeight; GY++)
 		} // for
 	} // for
 
-FinalTime = GetSystemTimeFP();
+FinalTime = DEFGTime();
 
 //CreateDumpTempElev("c:\\tmp\\Filled.raw");
 //DumpElev("c:\\tmp\\Final.raw");
 
 ElapsedTime = (FinalTime - BeginTime);
 
-#ifdef DEFG_BUILD_WCSVNS
-if (BWRB)
-	{
-	delete BWRB;
-	BWRB = NULL;
-	} // if
+Host->ProgressEnd();
 if (Abort)
 	return(0);
-#endif // DEFG_BUILD_WCSVNS
 
-//sprintf(StatusOut, "Total Elapsed Time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Total Elapsed Time: %f seconds.\n", ElapsedTime); PrintStatus(StatusOut);
 
 return(1);
 
@@ -2540,7 +1830,11 @@ return(1);
 
 DEFG::DEFG()
 {
+Host = &DefaultHost;
 densify = false;
+Extrapolate = 1;	// until SetExtrap or DoGrid says otherwise
+RowUnify = ColUnify = NULL;	// no tile-edge unification until SetupUnifyInfo
+UnifyNSTileNum = UnifyEWTileNum = UnifyNSTiles = UnifyEWTiles = 0;
 TempBuf = NULL;
 TempFloat = FinalOutput = EdgeBuf = NULL;
 SNX = NULL;
@@ -2560,7 +1854,7 @@ MaxPoints = MaxSpans = 0;
 NullVal = -9999.0f;
 SmoothVal = 0.0f;
 Smoothing = 0;
-SmoothPass = 0;
+PeakRoom = PitRoom = 0.0;
 
 // very permissive bounds
 BoundLowX  = -DBL_MAX;
@@ -2574,26 +1868,25 @@ BoundHighY =  DBL_MAX;
 
 int DEFG::AllocRasterBufs(int FullGridWidth, int FullGridHeight)
 {
-	size_t FinalOutItemSize = sizeof(unsigned long long); // because it doubles as the ID buffer, which is a 64-bit pointer
 
 // <<<>>> TempBuf only needs to be used when extrapolate is on
-if (!(TempBuf = (unsigned char *)calloc(1, FullGridWidth * FullGridHeight * sizeof(unsigned char))))
+if (!(TempBuf = (unsigned char *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(unsigned char))))
 	return(0);
-if (!(TempFloat = (float *)calloc(1, FullGridWidth * FullGridHeight * sizeof(float))))
+if (!(TempFloat = (float *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(float))))
 	return(0);
-if (!(FinalOutput = (float *)calloc(1, FullGridWidth * FullGridHeight * FinalOutItemSize)))
+if (!(FinalOutput = (float *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(uintptr_t))))	// sized for the ID grid, which shares this block
 	return(0);
-if (!(EdgeBuf = (float *)calloc(1, FullGridWidth * FullGridHeight * sizeof(float))))
+if (!(EdgeBuf = (float *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(float))))
 	return(0);
-if (!(XCoordBuf = (double *)calloc(1, FullGridWidth * FullGridHeight * sizeof(double))))
+if (!(XCoordBuf = (double *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(double))))
 	return(0);
 // ID buf now occupies same block as FinalOutput as they are never used at the same time
-/*if (!(ID = (unsigned long int *)calloc(1, FullGridWidth * FullGridHeight * sizeof(unsigned long int))))
+/*if (!(ID = (unsigned long int *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(unsigned long int))))
 	return(0);*/
-if (!(NonInfectious = (unsigned char *)calloc(1, FullGridWidth * FullGridHeight * sizeof(unsigned char))))
+if (!(NonInfectious = (unsigned char *)Host->Alloc(FullGridWidth * FullGridHeight * sizeof(unsigned char))))
 	return(0);
 
-ID = (unsigned long long *)FinalOutput;
+ID = (uintptr_t *)FinalOutput;
 
 // SNX is a temporary masquerade of TempFloat
 SNX = TempFloat;
@@ -2612,9 +1905,7 @@ int InitSmoothing = 0;
 
 if (NewMaxPoints == 0)
 	{
-#if defined(WCS_BUILD_VNS) || defined(WCS_BUILD_W6)
-	GlobalApp->StatusLog->PostError(WCS_LOG_SEVERITY_ERR, "No points selected.");
-#endif
+	Host->LogError("No points selected.");
 	return(0);
 	} // if
 
@@ -2640,12 +1931,12 @@ WriteGridOffY = ExtraGridHeight;
 
 if (InitSmoothing)
 	{
-	if (!(SmoothedInPoints = (struct SmoothedInputPoint *)calloc(1, NewMaxPoints * sizeof(struct SmoothedInputPoint))))
+	if (!(SmoothedInPoints = (struct SmoothedInputPoint *)Host->Alloc(NewMaxPoints * sizeof(struct SmoothedInputPoint))))
 		return(0);
 	} // if
 else
 	{
-	if (!(InPoints = (struct InputPoint *)calloc(1, NewMaxPoints * sizeof(struct InputPoint))))
+	if (!(InPoints = (struct InputPoint *)Host->Alloc(NewMaxPoints * sizeof(struct InputPoint))))
 		return(0);
 	} // else
 
@@ -2668,12 +1959,12 @@ int DEFG::InitSpans(int NewMaxSpans)
 
 if (Smoothing)
 	{
-	if (!(SmoothedEdges = (struct SmoothedSpan *)calloc(1, NewMaxSpans * sizeof(struct SmoothedSpan))))
+	if (!(SmoothedEdges = (struct SmoothedSpan *)Host->Alloc(NewMaxSpans * sizeof(struct SmoothedSpan))))
 		return(0);
 	} // if
 else
 	{
-	if (!(Edges = (struct Span *)calloc(1, NewMaxSpans * sizeof(struct Span))))
+	if (!(Edges = (struct Span *)Host->Alloc(NewMaxSpans * sizeof(struct Span))))
 		return(0);
 	} // else
 
@@ -2688,21 +1979,21 @@ return(1);
 DEFG::~DEFG()
 {
 
-if (TempBuf)		free(TempBuf);
-if (TempFloat)		free(TempFloat);
-if (FinalOutput)	free(FinalOutput);
-if (EdgeBuf)		free(EdgeBuf);
-if (XCoordBuf)		free(XCoordBuf);
+if (TempBuf)		Host->Free(TempBuf, DefgGridCells * sizeof(unsigned char));
+if (TempFloat)		Host->Free(TempFloat, DefgGridCells * sizeof(float));
+if (FinalOutput)	Host->Free(FinalOutput, DefgGridCells * sizeof(uintptr_t));
+if (EdgeBuf)		Host->Free(EdgeBuf, DefgGridCells * sizeof(float));
+if (XCoordBuf)		Host->Free(XCoordBuf, DefgGridCells * sizeof(double));
 // ID buf now occupies same block as FinalOutput as they are never used at the same time
-//if (ID)			free(ID);
-if (NonInfectious)	free(NonInfectious);
+//if (ID)			Host->Free(ID, DefgGridCells * sizeof(unsigned long int));
+if (NonInfectious)	Host->Free(NonInfectious, DefgGridCells * sizeof(unsigned char));
 
 // SNX is a masquerades of TempFloat and doesn't get freed
 
-if (InPoints)			free(InPoints);
-if (SmoothedInPoints)	free(SmoothedInPoints);
-if (Edges)				free(Edges);
-if (SmoothedEdges)		free(SmoothedEdges);
+if (InPoints)			Host->Free(InPoints, MaxPoints * sizeof(struct InputPoint));
+if (SmoothedInPoints)	Host->Free(SmoothedInPoints, MaxPoints * sizeof(struct SmoothedInputPoint));
+if (Edges)				Host->Free(Edges, MaxSpans * sizeof(struct Span));
+if (SmoothedEdges)		Host->Free(SmoothedEdges, MaxSpans * sizeof(struct SmoothedSpan));
 
 InPoints = NULL;
 SmoothedInPoints = NULL;
@@ -2735,7 +2026,7 @@ if (X >= BoundLowX && X <= BoundHighX && Y >= BoundLowY && Y <= BoundHighY)
 		SmoothedInPoints[LoadedPoints].PointNum = LoadedPoints;
 		SmoothedInPoints[LoadedPoints].NumSpans = SmoothedInPoints[LoadedPoints].MaxSpans = 0;
 		SmoothedInPoints[LoadedPoints].SpanBlock = NULL;
-		SmoothedInPoints[LoadedPoints].Normal[0] = SmoothedInPoints[LoadedPoints].Normal[1] = SmoothedInPoints[LoadedPoints].Normal[2] = 0.0f;
+		SmoothedInPoints[LoadedPoints].SlopeX = SmoothedInPoints[LoadedPoints].SlopeY = 0.0;
 		} // if
 	else
 		{
@@ -2771,7 +2062,7 @@ if (pt1[0] >= BoundLowX && pt1[0] <= BoundHighX && pt1[1] >= BoundLowY && pt1[1]
 		SmoothedInPoints[LoadedPoints].PointNum = LoadedPoints;
 		SmoothedInPoints[LoadedPoints].NumSpans = SmoothedInPoints[LoadedPoints].MaxSpans = 0;
 		SmoothedInPoints[LoadedPoints].SpanBlock = NULL;
-		SmoothedInPoints[LoadedPoints].Normal[0] = SmoothedInPoints[LoadedPoints].Normal[1] = SmoothedInPoints[LoadedPoints].Normal[2] = 0.0f;
+		SmoothedInPoints[LoadedPoints].SlopeX = SmoothedInPoints[LoadedPoints].SlopeY = 0.0;
 		} // if
 	else
 		{
@@ -2809,7 +2100,7 @@ for(unsigned long AddCount = 0; AddCount < num2add; AddCount++)
 			SmoothedInPoints[LoadedPoints].PointNum = LoadedPoints;
 			SmoothedInPoints[LoadedPoints].NumSpans = SmoothedInPoints[LoadedPoints].MaxSpans = 0;
 			SmoothedInPoints[LoadedPoints].SpanBlock = NULL;
-			SmoothedInPoints[LoadedPoints].Normal[0] = SmoothedInPoints[LoadedPoints].Normal[1] = SmoothedInPoints[LoadedPoints].Normal[2] = 0.0f;
+			SmoothedInPoints[LoadedPoints].SlopeX = SmoothedInPoints[LoadedPoints].SlopeY = 0.0;
 			} // if
 		else
 			{
@@ -2841,379 +2132,197 @@ BoundHighY = simplemax(NewMinY, NewMaxY);
 XRange = (BoundHighX - BoundLowX);
 YRange = (BoundHighY - BoundLowY);
 
-//sprintf(StatusOut, "Lat:  %f to %f.\n", -HighY, -LowY); PrintStatus(StatusOut);
-//sprintf(StatusOut, "Lon:  %f to %f.\n", -HighX, -LowX); PrintStatus(StatusOut);
-//sprintf(StatusOut, "Elev: %f to %f.\n", HighZ, LowZ); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Lat:  %f to %f.\n", -HighY, -LowY); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Lon:  %f to %f.\n", -HighX, -LowX); PrintStatus(StatusOut);
+//snprintf(StatusOut, sizeof(StatusOut), "Elev: %f to %f.\n", HighZ, LowZ); PrintStatus(StatusOut);
 
 } // DEFG::SetBounds
 
 /*===========================================================================*/
 
-#if defined(DEFG_WITH_VNS)
-// API used to be compatible with nngridr
+// One pass over the host's control points for DoGrid: counts the points that fall in the tile, or adds them
+// to the gridder. Densify adds interpolated points between consecutive points of one object.
+class DEFGTilePoints: public DEFGPointSink
+	{
+	public:
+		DEFG *AddTo;	// NULL to count only
+		bool densify, first_point;
+		int SomeOverscan, InitMaxPoints, NOOSMaxPoints;
+		unsigned long adding;
+		double minx, maxx, miny, maxy, XStart, XTerm, YStart, YTerm;
+		double cell_x, cell_y, last_x, last_y, last_z;
 
-#if defined(DEFG_WITH_VNS)
-int DEFG::DoGrid(Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, TerraGridder *TG, Joe **TCJoeList, int JoeCount, int TCCount, NNGrid *nng,
-	double xstart, double xterm, double ystart, double yterm, CoordSys *MyCS)
+		virtual void BeginObject(void) {first_point = true; adding = 0;};
+		virtual void Point(double VX, double VY, double VZ);
+	}; // DEFGTilePoints
+
+void DEFGTilePoints::Point(double VX, double VY, double VZ)
 {
-double minx, maxx, miny, maxy, LapX, LapY, VX, VY, VZ, Horilap = 0.0, Vertlap = 0.0;
-double add_x, add_y, cell_x, cell_y, delta_x, delta_y, last_x, last_y, last_z;
-VertexDEM CSConvert;
-#ifdef DEFG_BUILD_WCSVNS
-BusyWin *BWRB = NULL;
-#endif
-JoeCoordSys *MyAttr;
-CoordSys *MyCoords;
-VectorPoint *PLink;
-unsigned long adding;
-int InitWidth, InitHeight, InitMaxPoints, NOOSMaxPoints, PointLoop, SomeOverscan = 0, JoeLoop = 0;
-bool first_point;
-//int Boop;
-
-// steal relevant values fron NNGrid object for our use
-InitWidth  = nng->x_nodes;
-InitHeight = nng->y_nodes;
-
-// x & y nodes are already adjusted for overlap
-XStart = xstart;
-XTerm  = xterm;
-YStart = ystart;
-YTerm  = yterm;
+double add_x, add_y, delta_x, delta_y;
 
 if (densify)
 	{
-	cell_x = (XTerm - XStart) / (InitWidth - 1);
-	cell_y = (YTerm - YStart) / (InitHeight - 1);
+	if (! first_point)
+		{
+		add_y = add_x = 0;
+		adding = 0;
+		delta_x = fabs(VX - last_x);
+		delta_y = fabs(VY - last_y);
+		if (delta_x > cell_x)
+			{
+			add_x = ceil(delta_x / cell_x) - 1.0;
+			} // if
+		if (delta_y > cell_y)
+			{
+			add_y = ceil(delta_y / cell_y) - 1.0;
+			} // if
+		adding += simplemax((unsigned long)add_x, (unsigned long)add_y);
+		} // if
+	else
+		{
+		first_point = false;
+		} // else
+	last_x = VX;
+	last_y = VY;
+	last_z = VZ;
 	} // if
 
-Horilap = nng->horilap;
-Vertlap = nng->vertlap;
+if (VX >= minx && VX <= maxx && VY >= miny && VY <= maxy)
+	{
+	if (! AddTo)
+		{
+		InitMaxPoints++;
+		InitMaxPoints += adding;
+		// if overscan, count points within non-overscan region
+		if (SomeOverscan && VX >= XStart && VX <= XTerm && VY >= YStart && VY <= YTerm)
+			{
+			NOOSMaxPoints++;
+			NOOSMaxPoints += adding;
+			} // if
+		} // if
+	else if (densify && adding)
+		{
+		Point3d thisPt, lastPt;
+
+		thisPt[0] = VX;
+		thisPt[1] = VY;
+		thisPt[2] = VZ;
+		lastPt[0] = last_x;
+		lastPt[1] = last_y;
+		lastPt[2] = last_z;
+		AddTo->AddPoints(thisPt, lastPt, adding);
+		} // else if
+	else
+		{
+		AddTo->AddPoint(VX, VY, VZ);
+		} // else
+	} // if values in grid region
+
+} // DEFGTilePoints::Point
+
+/*===========================================================================*/
+
+// Grids one tile: gets the control points from the host (twice: to count them, then to load the ones in the
+// tile and its overscan), grids them and hands the result to the host.
+int DEFG::DoGrid(const DEFGGridSpec &Spec)
+{
+double LapX, LapY, Horilap = 0.0, Vertlap = 0.0;
+DEFGTilePoints Tile;
+
+// x & y nodes are already adjusted for overlap
+XStart = Spec.XStart;
+XTerm  = Spec.XTerm;
+YStart = Spec.YStart;
+YTerm  = Spec.YTerm;
+
+Tile.AddTo = NULL;
+Tile.densify = densify;
+Tile.SomeOverscan = 0;
+Tile.InitMaxPoints = Tile.NOOSMaxPoints = 0;
+Tile.cell_x = Tile.cell_y = Tile.last_x = Tile.last_y = Tile.last_z = 0.0;
+Tile.BeginObject();
+if (densify)
+	{
+	Tile.cell_x = (XTerm - XStart) / (Spec.Cols - 1);
+	Tile.cell_y = (YTerm - YStart) / (Spec.Rows - 1);
+	} // if
+
+Horilap = Spec.HorOverlap;
+Vertlap = Spec.VertOverlap;
 
 LapX = fabs(Horilap * (XTerm - XStart) / 100.0);
 LapY = fabs(Vertlap * (YTerm - YStart) / 100.0);
 
 if (Horilap != 0.0 || Vertlap != 0.0)
 	{
-	SomeOverscan = 1;
+	Tile.SomeOverscan = 1;
 	} // if
 
-LowX  = minx = XStart - LapX;
-HighX = maxx = XTerm + LapX;
-LowY  = miny = YStart - LapY;
-HighY = maxy = YTerm + LapY;
+Tile.XStart = XStart;
+Tile.XTerm = XTerm;
+Tile.YStart = YStart;
+Tile.YTerm = YTerm;
+LowX  = Tile.minx = XStart - LapX;
+HighX = Tile.maxx = XTerm + LapX;
+LowY  = Tile.miny = YStart - LapY;
+HighY = Tile.maxy = YTerm + LapY;
 
 // enumerate total points
-InitMaxPoints = NOOSMaxPoints = 0;
-#ifdef DEFG_LIMIT_INPOINTS
-if (TCCount > DEFG_LIMIT_INPOINTS)
+if (! Host->EnumeratePoints("Counting Points in Tile", Tile))
 	{
-	InPointExcess = TCCount - DEFG_LIMIT_INPOINTS;
-	if (InPointExcess < 0)
-		{
-		InPointExcess = 0;
-		} // if
+	return(0);
 	} // if
+#ifdef DEFG_LIMIT_INPOINTS
+InPointExcess = Tile.InitMaxPoints > DEFG_LIMIT_INPOINTS ? Tile.InitMaxPoints - DEFG_LIMIT_INPOINTS: 0;
 #endif // DEFG_LIMIT_INPOINTS
-#ifdef DEFG_BUILD_WCSVNS
-BWRB = new BusyWin("Counting Points in Tile", JoeCount, 'BWSE', 0);
-#endif
-for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
-	{
-	Joe *CurJoe;
-
-	CurJoe = TCJoeList[JoeLoop];
-	if (!CurJoe) break; // encounter NULL entry before expected end, shouldn't happen
-
-	if (MyAttr = (JoeCoordSys *)CurJoe->MatchAttribute(WCS_JOE_ATTRIB_INTERNAL, WCS_JOE_ATTRIB_INTERNAL_COORDSYS))
-		MyCoords = MyAttr->Coord;
-	else
-		MyCoords = NULL;
-
-	first_point = true;
-	adding = 0;
-	for (PLink = CurJoe->GetFirstRealPoint(); PLink; PLink = PLink->Next)
-		{
-		VertexDEM CurVert;
-
-		if (PLink->ProjToDefDeg(MyCoords, &CurVert))
-			{
-			//CurVert.Lon;
-			//CurVert.Lat;
-			VZ = CurVert.Elev;
-
-			if (MyCS)
-				{
-				CSConvert.Lon = CurVert.Lon;
-				CSConvert.Lat = CurVert.Lat;
-				MyCS->DefDegToProj(&CSConvert);
-
-				if (MyCS->Method.GCTPMethod == 0) // geographic
-					{ // flip
-					VX = -CSConvert.xyz[0];
-					VY = CSConvert.xyz[1];
-					} // if
-				else
-					{
-					VX = CSConvert.xyz[0];
-					VY = CSConvert.xyz[1];
-					} // else
-				} // if
-			else
-				{ // geographic, flip
-				VX = -CurVert.Lon;
-				VY = CurVert.Lat;
-				} // else
-
-			if (densify)
-				{
-				if (! first_point)
-					{
-					add_y = add_x = 0;
-					adding = 0;
-					delta_x = fabs(VX - last_x);
-					delta_y = fabs(VY - last_y);
-					if (delta_x > cell_x)
-						{
-						add_x = ceil(delta_x / cell_x) - 1.0;
-						} // if
-					if (delta_y > cell_y)
-						{
-						add_y = ceil(delta_y / cell_y) - 1.0;
-						} // if
-					adding += std::max((unsigned long)add_x, (unsigned long)add_y);
-					} // if
-				else
-					{
-					first_point = false;
-					} // else
-				last_x = VX;
-				last_y = VY;
-				} // if
-
-			if (VX >= minx && VX <= maxx && VY >= miny && VY <= maxy)
-				{
-				InitMaxPoints++;
-				InitMaxPoints += adding;
-				// if overscan, count points within non-overscan region
-				if (SomeOverscan && VX >= XStart && VX <= XTerm && VY >= YStart && VY <= YTerm)
-					{
-					NOOSMaxPoints++;
-					NOOSMaxPoints += adding;
-					} // if
-				} // if values in grid region
-			else
-				{
-				//Boop = 1;
-				} // else
-			} // if
-		} // for
-
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB && BWRB->Update(JoeLoop))
-		{
-		return(0);
-		} // if
-#endif // DEFG_BUILD_WCSVNS
-} // for
-
-#ifdef DEFG_BUILD_WCSVNS
-
-if (BWRB) delete BWRB;
-BWRB = NULL;
-#endif // DEFG_BUILD_WCSVNS
 
 // would default overscan values be ineffective here?
-if (SomeOverscan && InitMaxPoints == NOOSMaxPoints && Vertlap == 100.0 && Horilap == 100.0)
+if (Tile.SomeOverscan && Tile.InitMaxPoints == Tile.NOOSMaxPoints && Vertlap == 100.0 && Horilap == 100.0)
 	{ // disable overscan
 	// reset all values internally to non-overscan versions
 	Vertlap = Horilap = 0.0;
 	LapX = LapY = 0.0;
-	LowX  = minx = XStart - LapX;
-	HighX = maxx = XTerm + LapX;
-	LowY  = miny = YStart - LapY;
-	HighY = maxy = YTerm + LapY;
+	LowX  = Tile.minx = XStart - LapX;
+	HighX = Tile.maxx = XTerm + LapX;
+	LowY  = Tile.miny = YStart - LapY;
+	HighY = Tile.maxy = YTerm + LapY;
 	} // if
 
-SetExtrap(nng->extrap);
-SetNullVal((float)nng->nuldat);
+SetExtrap(Spec.Extrapolate);
+SetNullVal(Spec.NullValue);
 // must set smooth val before initsizes so we can allocate smoothing data structures
-SetSmoothVal((float)nng->bI);
-if (InitSizes(InitWidth, InitHeight, Horilap, Vertlap, InitMaxPoints))
+SetSmoothVal(Spec.Smoothing);
+SetLimits(Spec.PeakRise, Spec.PitDepth);
+if (InitSizes(Spec.Cols, Spec.Rows, Horilap, Vertlap, Tile.InitMaxPoints))
 	{
-	SetBounds(minx, maxx, miny, maxy);
+	SetBounds(Tile.minx, Tile.maxx, Tile.miny, Tile.maxy);
 	// transfer points to DEFG internal
-#ifdef DEFG_BUILD_WCSVNS
-	BWRB = new BusyWin("Clipping Points in Tile", JoeCount, 'BWSE', 0);
-#endif
-	for (PointLoop = 0, JoeLoop = 0; JoeLoop < JoeCount; JoeLoop++)
+	Tile.AddTo = this;
+	if (! Host->EnumeratePoints("Clipping Points in Tile", Tile))
 		{
-		Joe *CurJoe;
-
-		CurJoe = TCJoeList[JoeLoop];
-		if (!CurJoe) break; // encounter NULL entry before expected end, shouldn't happen
-
-		if (MyAttr = (JoeCoordSys *)CurJoe->MatchAttribute(WCS_JOE_ATTRIB_INTERNAL, WCS_JOE_ATTRIB_INTERNAL_COORDSYS))
-			MyCoords = MyAttr->Coord;
-		else
-			MyCoords = NULL;
-
-		first_point = true;
-		adding = 0;
-		for (PLink = CurJoe->GetFirstRealPoint(); PLink; PLink = PLink->Next)
-			{
-			VertexDEM CurVert;
-
-			if (PLink->ProjToDefDeg(MyCoords, &CurVert))
-				{
-				//CurVert.Lon;
-				//CurVert.Lat;
-				VZ = CurVert.Elev;
-
-				if (MyCS)
-					{
-					CSConvert.Lon = CurVert.Lon;
-					CSConvert.Lat = CurVert.Lat;
-					MyCS->DefDegToProj(&CSConvert);
-
-					if (MyCS->Method.GCTPMethod == 0) // geographic
-						{ // flip
-						VX = -CSConvert.xyz[0];
-						VY = CSConvert.xyz[1];
-						} // if
-					else
-						{
-						VX = CSConvert.xyz[0];
-						VY = CSConvert.xyz[1];
-						} // else
-					} // if
-				else
-					{ // geographic, flip
-					VX = -CurVert.Lon;
-					VY = CurVert.Lat;
-					} // else
-
-				if (densify)
-					{
-					if (! first_point)
-						{
-						add_y = add_x = 0;
-						adding = 0;
-						delta_x = fabs(VX - last_x);
-						delta_y = fabs(VY - last_y);
-						if (delta_x > cell_x)
-							{
-							add_x = ceil(delta_x / cell_x) - 1.0;
-							} // if
-						if (delta_y > cell_y)
-							{
-							add_y = ceil(delta_y / cell_y) - 1.0;
-							} // if
-						adding += std::max((unsigned long)add_x, (unsigned long)add_y);
-						} // if
-					else
-						{
-						first_point = false;
-						} // else
-					last_x = VX;
-					last_y = VY;
-					last_z = VZ;
-					} // if
-
-				if (VX >= minx && VX <= maxx && VY >= miny && VY <= maxy)
-					{
-					if (densify && adding)
-						{
-						Point3d thisPt, lastPt;
-
-						thisPt[0] = VX;
-						thisPt[1] = VY;
-						thisPt[2] = VZ;
-						lastPt[0] = last_x;
-						lastPt[1] = last_y;
-						lastPt[2] = last_z;
-						AddPoints(thisPt, lastPt, adding);
-						} // if
-					else
-						{
-						AddPoint(VX, VY, VZ);
-						}
-					} // if values in grid region
-				else
-					{
-					//Boop = 1;
-					} // else
-				} // if
-			} // for
-#ifdef DEFG_BUILD_WCSVNS
-		if (BWRB && BWRB->Update(JoeLoop))
-			{
-			return(0);
-			} // if
-#endif
-		} // for
-#ifdef DEFG_BUILD_WCSVNS
-	if (BWRB) delete BWRB;
-	BWRB = NULL;
-#endif
-
-	// if we're not tiled, we could dump the initial points array here, as we've
-	// already made our own internal copy.
-	if (!(TG->EWMaps || TG->NSMaps))
-		{
-		TG->FreeControlPts();
+		return(0);
 		} // if
+
+	// we've made our own internal copy of the points
+	Host->PointsLoaded();
 
 	if (Grid())
 		{
-		return(SaveDEM(MyCS, DBHost, ProjHost, EffectsHost, nng));
+		return(SaveDEM());
 		} // if
 	} // if
 
 return(0);
 
 } // DEFG::DoGrid
-#endif // DEFG_WITH_VNS
+
 /*===========================================================================*/
-#endif
 
-int DEFG::SaveDEM(CoordSys *MyCS, Database *DBHost, Project *ProjHost, EffectsLib *EffectsHost, NNGrid *nng)
+// Trims the overscan off the finished grid, makes shared tile edges agree and hands the result to the host.
+int DEFG::SaveDEM(void)
 {
-	int Success = 0;
-#if defined(DEFG_WITH_VNS)
-#ifdef DEFG_BUILD_WCSVNS
-
-// much code stolen from Gary's DEM saver in NNGrid.cpp -- NNGrid::MakeGrid()
-double GeoFlipMult = -1.0;
-//JoeDEM *MyDEM;
-DEM TempDEM;
-long SaveSize;
-float *GridPtr, *SavePtr;
-Joe *Clip, *Added = NULL;
-//NotifyTag ChangeEvent[2];
-LayerEntry *LE = NULL;
+DEFGGridResult Result;
 long x, y, SubsetIdx;
-int Found = 0;
-char filename[256], ObjName[64], BaseName[64] /*, NameStr[64] */;
-
-// if we're geographic coords, we must flip lon values into WCS convention before writing.
-if (MyCS && MyCS->Method.GCTPMethod) GeoFlipMult = 1.0;
-
-// save DEM
-TempDEM.pLonEntries = WriteGridWidth;
-TempDEM.pLatEntries = WriteGridHeight;
-SaveSize = WriteGridWidth * WriteGridHeight * sizeof(float);
-
-TempDEM.pLatStep = (YTerm - YStart) / (WriteGridHeight - 1); // Y step
-TempDEM.pLonStep = (-1.0 * GeoFlipMult) * ((XTerm - XStart) / (WriteGridWidth - 1)); // X step
-TempDEM.pNorthWest.Lon = GeoFlipMult * XStart;
-TempDEM.pSouthEast.Lat = YStart;
-TempDEM.pNorthWest.Lat = TempDEM.pSouthEast.Lat + (TempDEM.pLatEntries - 1) * TempDEM.pLatStep;
-TempDEM.pSouthEast.Lon = (TempDEM.pNorthWest.Lon - (TempDEM.pLonEntries - 1) * TempDEM.pLonStep);
-TempDEM.pElScale = ELSCALE_METERS;
-TempDEM.pElDatum = 0.0;
-TempDEM.SetNullValue(NullVal);
-TempDEM.SetNullReject(1);
-TempDEM.PrecalculateCommonFactors();
 
 // need to subset grid in-place?
 if (WriteGridOffX || WriteGridOffY)
@@ -3232,7 +2341,7 @@ if (RowUnify && ColUnify)
 	{ // need to store and restore certain samples for edge unification
 	float *OutputStrip;
 	unsigned long int FullNumRows, FullNumCols;
-
+	
 	FullNumRows = (UnifyNSTiles * (WriteGridHeight - 1)) + 1;
 	FullNumCols = (UnifyEWTiles * (WriteGridWidth - 1)) + 1;
 
@@ -3373,40 +2482,27 @@ if (RowUnify && ColUnify)
 
 	} // if
 
+Result.Elev = FinalOutput;
+Result.Cols = WriteGridWidth;
+Result.Rows = WriteGridHeight;
+Result.XStart = XStart;
+Result.XTerm = XTerm;
+Result.YStart = YStart;
+Result.YTerm = YTerm;
+Result.NullValue = NullVal;
 
-if ((TempDEM.RawMap = (float *)malloc(SaveSize)) != NULL)
-	{
-	SavePtr = TempDEM.RawMap;
-	for (x = 0; x < WriteGridWidth; x ++)
-		{
-		GridPtr = FinalOutput + x;
-		for (y = 1; y <= WriteGridHeight; y ++, SavePtr ++, GridPtr += WriteGridWidth)
-			{
-			*SavePtr = (float)(*GridPtr);
-			} // for y
-		} // for x
-	strcpy(ObjName, nng->grd_file);
-	strcpy(BaseName, ObjName);
-	strcat(ObjName, ".elev");
-	strmfp(filename, nng->grd_dir, ObjName);
-	TempDEM.FindElMaxMin();
-	Clip = DBHost->AddDEMToDatabase("Terrain Gridder", BaseName, &TempDEM, MyCS, ProjHost, EffectsHost);
-	if (TempDEM.SaveDEM(filename, GlobalApp->StatusLog))
-		{
-		GlobalApp->StatusLog->PostStockError(WCS_LOG_MSG_DEM_SAVE, ObjName);
-		Success = 1;
-		} // if
-	else
-		UserMessageOK("Terrain Gridder", "Error saving DEM! Check available drive space.");
-
-	TempDEM.FreeRawElevs();
-	} // if memory OK
-
-#endif // DEFG_BUILD_WCSVNS
-#endif // DEFG_WITH_VNS
-return(Success);
+return(Host->SaveGrid(Result));
 
 } // DEFG::SaveDEM
+
+/*===========================================================================*/
+
+void DEFG::SetHost(DEFGHost *NewHost)
+{
+
+Host = NewHost ? NewHost: &DefaultHost;
+
+} // DEFG::SetHost
 
 /*===========================================================================*/
 
@@ -3417,6 +2513,8 @@ SmoothVal = NewSmoothVal;
 
 if (SmoothVal < 0.0)
 	SmoothVal = 0.0f;
+if (SmoothVal > 100.0)
+	SmoothVal = 100.0f;
 
 if (SmoothVal > 0.0)
 	Smoothing = 1;
@@ -3427,3 +2525,18 @@ SSmoothFrac = SmoothVal / 100.0;
 LSmoothFrac = 1.0 - SSmoothFrac;
 
 } // DEFG::SetSmoothVal
+
+/*===========================================================================*/
+
+// How far the smoothed surface may go outside the points around a spot, in elevation units: above them (a peak) and
+// below them (a pit). 0 keeps it between them; a very large value sets that side free.
+// A curve leaves its two ends by at most a quarter of the room its end slopes are given. The surface is made of two
+// curves on top of each other, one along an edge and one along a row between edges, so each gets room for half the
+// limit: 2 times it.
+void DEFG::SetLimits(float PeakRise, float PitDepth)
+{
+
+PeakRoom = 2.0 * (PeakRise > 0.0f ? PeakRise: 0.0f);
+PitRoom = 2.0 * (PitDepth > 0.0f ? PitDepth: 0.0f);
+
+} // DEFG::SetLimits
